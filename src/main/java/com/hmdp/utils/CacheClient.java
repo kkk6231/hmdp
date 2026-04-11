@@ -4,7 +4,6 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.hmdp.entity.Shop;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +13,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+/**
+ * 缓存工具类
+ * 提供通用的缓存操作，包括：
+ * 1.普通缓存存取
+ * 2.逻辑过期缓存（解决缓存击穿）
+ * 3.缓存穿透防护（空值缓存）
+ * 注意：切换缓存方式时要清理redis中的数据。
+ *
+ * @author wangzhixiang
+ * @date 2026-4-11
+ */
 @Component
 public class CacheClient {
 
@@ -62,7 +72,7 @@ public class CacheClient {
      * @param <ID>
      */
     public <T, ID> T queryWithPassThrough(String keyPrefix, ID id, Class<T> type,
-                                          Function<ID, T> dbFallback, Long timeOut, TimeUnit timeUnit) {
+                                        Function<ID, T> dbFallback, Long timeOut, TimeUnit timeUnit) {
         String key = keyPrefix + id;
         // 1.从redis查询缓存（JSON格式）
         String Json = stringRedisTemplate.opsForValue().get(key);
