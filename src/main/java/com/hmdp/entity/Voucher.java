@@ -54,14 +54,14 @@ public class Voucher implements Serializable {
     private String rules;
 
     /**
-     * 支付金额
+     * 使用门槛，单位为分；0 表示无门槛
      */
-    private Long payValue;
+    private Long thresholdAmount;
 
     /**
-     * 抵扣金额
+     * 优惠金额，单位为分
      */
-    private Long actualValue;
+    private Long discountAmount;
 
     /**
      * 优惠券类型

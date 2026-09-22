@@ -14,8 +14,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import static com.hmdp.utils.RedisConstants.CACHE_NULL_TTL;
-import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
+import static com.hmdp.constant.RedisConstants.CACHE_NULL_TTL;
+import static com.hmdp.constant.RedisConstants.LOCK_SHOP_KEY;
 
 @Slf4j
 @Component

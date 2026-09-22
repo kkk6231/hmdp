@@ -31,3 +31,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local Codex artifacts and design documents ###
+.codex-tmp/
+RocketMQ全链路说明.md
+RocketMQ链路改造.md
+docs/
+黑马点评秒杀系统高并发可靠性改造开发文档.docx

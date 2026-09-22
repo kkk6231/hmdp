@@ -44,28 +44,6 @@ INSERT INTO `tb_blog` VALUES (6, 10, 1, '杭州周末好去处｜💰50就可以
 INSERT INTO `tb_blog` VALUES (7, 10, 1, '杭州周末好去处｜💰50就可以骑马啦🐎', '/imgs/blogs/blog1.jpg', '杭州周末好去处｜💰50就可以骑马啦🐎', 00000011, 00000000, '2022-01-11 16:05:47', '2022-01-11 16:05:47');
 
 -- ----------------------------
--- Table structure for tb_blog_comments
--- ----------------------------
-DROP TABLE IF EXISTS `tb_blog_comments`;
-CREATE TABLE `tb_blog_comments`  (
-  `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
-  `user_id` bigint(20) UNSIGNED NOT NULL COMMENT '用户id',
-  `blog_id` bigint(20) UNSIGNED NOT NULL COMMENT '探店id',
-  `parent_id` bigint(20) UNSIGNED NOT NULL COMMENT '关联的1级评论id，如果是一级评论，则值为0',
-  `answer_id` bigint(20) UNSIGNED NOT NULL COMMENT '回复的评论id',
-  `content` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '回复的内容',
-  `liked` int(8) UNSIGNED NULL DEFAULT NULL COMMENT '点赞数',
-  `status` tinyint(1) UNSIGNED NULL DEFAULT NULL COMMENT '状态，0：正常，1：被举报，2：禁止查看',
-  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
-
--- ----------------------------
--- Records of tb_blog_comments
--- ----------------------------
-
--- ----------------------------
 -- Table structure for tb_follow
 -- ----------------------------
 DROP TABLE IF EXISTS `tb_follow`;
@@ -89,8 +67,8 @@ CREATE TABLE `tb_seckill_voucher`  (
   `voucher_id` bigint(20) UNSIGNED NOT NULL COMMENT '关联的优惠券的id',
   `stock` int(8) NOT NULL COMMENT '库存',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `begin_time` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00' COMMENT '生效时间',
-  `end_time` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00' COMMENT '失效时间',
+  `begin_time` datetime NOT NULL COMMENT '生效时间',
+  `end_time` datetime NOT NULL COMMENT '失效时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`voucher_id`) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '秒杀优惠券表，与优惠券是一对一关系' ROW_FORMAT = Compact;
@@ -226,8 +204,8 @@ CREATE TABLE `tb_voucher`  (
   `title` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '代金券标题',
   `sub_title` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '副标题',
   `rules` varchar(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '使用规则',
-  `pay_value` bigint(10) UNSIGNED NOT NULL COMMENT '支付金额，单位是分。例如200代表2元',
-  `actual_value` bigint(10) NOT NULL COMMENT '抵扣金额，单位是分。例如200代表2元',
+  `threshold_amount` bigint(20) UNSIGNED NOT NULL DEFAULT 0 COMMENT '使用门槛，单位为分；0表示无门槛',
+  `discount_amount` bigint(20) UNSIGNED NOT NULL COMMENT '优惠金额，单位为分',
   `type` tinyint(1) UNSIGNED NOT NULL DEFAULT 0 COMMENT '0,普通券；1,秒杀券',
   `status` tinyint(1) UNSIGNED NOT NULL DEFAULT 1 COMMENT '1,上架; 2,下架; 3,过期',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -255,7 +233,8 @@ CREATE TABLE `tb_voucher_order`  (
   `use_time` timestamp NULL DEFAULT NULL COMMENT '核销时间',
   `refund_time` timestamp NULL DEFAULT NULL COMMENT '退款时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_user_voucher` (`user_id`, `voucher_id`) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------

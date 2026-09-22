@@ -19,7 +19,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import javax.servlet.http.HttpSession;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -27,8 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.hmdp.utils.RedisConstants.*;
-import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
+import static com.hmdp.constant.RedisConstants.*;
+import static com.hmdp.constant.SystemConstants.USER_NICK_NAME_PREFIX;
 
 /**
  * <p>
@@ -46,7 +45,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     private StringRedisTemplate stringRedisTemplate;
 
     @Override
-    public Result sendCode(String phone, HttpSession session) {
+    public Result sendCode(String phone) {
         // 1.校验手机号
         if (RegexUtils.isPhoneInvalid(phone)) {
             // 2.如果不符合，返回错误信息
@@ -55,17 +54,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 3.符合，生成验证码
         String code = RandomUtil.randomNumbers(6);
 
-        // 4.保存验证码到 session
+        // 4.保存验证码到 Redis
         stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
 
         // 5.发送验证码
         log.debug("发送短信验证码成功，验证码：{}", code);
-        // 返回ok
-        return Result.ok();
+        // 开发环境暂未接入短信服务，直接将验证码返回给前端
+        return Result.ok(code);
     }
 
     @Override
-    public Result login(LoginFormDTO loginForm, HttpSession session) {
+    public Result login(LoginFormDTO loginForm) {
         // 1.校验手机号
         String phone = loginForm.getPhone();
         if (RegexUtils.isPhoneInvalid(phone)) {

@@ -1,5 +1,6 @@
 package com.hmdp.utils;
 
+import com.hmdp.constant.RegexPatterns;
 import cn.hutool.core.util.StrUtil;
 
 /**

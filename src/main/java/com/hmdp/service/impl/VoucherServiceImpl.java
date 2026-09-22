@@ -7,14 +7,17 @@ import com.hmdp.entity.Voucher;
 import com.hmdp.mapper.VoucherMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherService;
+import com.hmdp.constant.SeckillRedisKeys;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.time.ZoneId;
+import java.util.Date;
 import java.util.List;
 
-import static com.hmdp.utils.RedisConstants.SECKILL_STOCK_KEY;
+import static com.hmdp.constant.SeckillRedisKeys.VOUCHER_KEY_GRACE_SECONDS;
 
 /**
  * <p>
@@ -53,6 +56,12 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucher.setEndTime(voucher.getEndTime());
         seckillVoucherService.save(seckillVoucher);
         // 保存秒杀库存到Redis中
-        stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucher.getId(), voucher.getStock().toString());
+        String stockKey = SeckillRedisKeys.stockKey(voucher.getId());
+        stringRedisTemplate.opsForValue().set(stockKey, voucher.getStock().toString());
+        Date expireAt = Date.from(voucher.getEndTime()
+                .plusSeconds(VOUCHER_KEY_GRACE_SECONDS)
+                .atZone(ZoneId.systemDefault())
+                .toInstant());
+        stringRedisTemplate.expireAt(stockKey, expireAt);
     }
 }
