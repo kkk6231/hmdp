@@ -20,6 +20,7 @@ public final class SeckillResultMessages {
     public static final String ORDER_ACCESS_DENIED = "无权查询该订单";
     public static final String ORDER_STATUS_UNAVAILABLE = "订单状态暂时不可用，请稍后重试";
     public static final String ORDER_NOT_FOUND_OR_EXPIRED = "订单不存在或处理结果已过期";
+    public static final String REQUEST_TOO_FREQUENT = "请求过于频繁，请稍后再试";
 
     private SeckillResultMessages() {
     }

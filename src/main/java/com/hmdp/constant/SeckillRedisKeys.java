@@ -12,6 +12,8 @@ public final class SeckillRedisKeys {
     private static final String MQ_TRANSACTION_PREFIX = "seckill:mq:tx:";
     private static final String ORDER_RESULT_PREFIX = "seckill:order:result:";
     private static final String ORDER_LOCK_PREFIX = "lock:seckill:order:";
+    private static final String RATE_LIMIT_USER_PREFIX = "seckill:rate:user:";
+    private static final String RATE_LIMIT_IP_PREFIX = "seckill:rate:ip:";
 
     public static final String ORDER_PENDING_KEY = "seckill:order:pending";
     public static final String VOUCHER_BEGIN_TIME_FIELD = "beginTime";
@@ -47,5 +49,19 @@ public final class SeckillRedisKeys {
 
     public static String orderLockKey(Long orderId) {
         return ORDER_LOCK_PREFIX + orderId;
+    }
+
+    /**
+     * 同一用户对同一优惠券的秒杀请求限流 Key。
+     */
+    public static String rateLimitUserKey(Long voucherId, Long userId) {
+        return RATE_LIMIT_USER_PREFIX + voucherId + ":" + userId;
+    }
+
+    /**
+     * 同一 IP 对同一优惠券的秒杀请求限流 Key。
+     */
+    public static String rateLimitIpKey(Long voucherId, String clientIp) {
+        return RATE_LIMIT_IP_PREFIX + voucherId + ":" + clientIp;
     }
 }
