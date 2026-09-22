@@ -38,6 +38,8 @@ build/
 !.env.example
 src/main/resources/application-local.yml
 src/main/resources/application-local.yaml
+config/application-local.yml
+config/application-local.yaml
 
 ### Local Codex artifacts and design documents ###
 .codex-tmp/
