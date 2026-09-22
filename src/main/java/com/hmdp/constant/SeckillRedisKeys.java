@@ -13,7 +13,7 @@ public final class SeckillRedisKeys {
     private static final String ORDER_RESULT_PREFIX = "seckill:order:result:";
     private static final String ORDER_LOCK_PREFIX = "lock:seckill:order:";
     private static final String RATE_LIMIT_USER_PREFIX = "seckill:rate:user:";
-    private static final String RATE_LIMIT_IP_PREFIX = "seckill:rate:ip:";
+    private static final String RATE_LIMIT_VOUCHER_PREFIX = "seckill:rate:voucher:";
 
     public static final String ORDER_PENDING_KEY = "seckill:order:pending";
     public static final String VOUCHER_BEGIN_TIME_FIELD = "beginTime";
@@ -59,9 +59,9 @@ public final class SeckillRedisKeys {
     }
 
     /**
-     * 同一 IP 对同一优惠券的秒杀请求限流 Key。
+     * 同一优惠券进入秒杀核心链路的全局限流 Key。
      */
-    public static String rateLimitIpKey(Long voucherId, String clientIp) {
-        return RATE_LIMIT_IP_PREFIX + voucherId + ":" + clientIp;
+    public static String rateLimitVoucherKey(Long voucherId) {
+        return RATE_LIMIT_VOUCHER_PREFIX + voucherId;
     }
 }

@@ -1,7 +1,9 @@
 package com.hmdp.aspect;
 
 import com.hmdp.annotation.SeckillRateLimit;
+import com.hmdp.constant.SeckillRateLimitResult;
 import com.hmdp.constant.SeckillRedisKeys;
+import com.hmdp.constant.SeckillResultMessages;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.exception.RateLimitException;
 import com.hmdp.service.IRateLimitService;
@@ -10,13 +12,11 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
-import javax.servlet.http.HttpServletRequest;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
@@ -28,7 +28,6 @@ class SeckillRateLimitAspectTest {
 
     private final IRateLimitService rateLimitService = mock(IRateLimitService.class);
     private final ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
-    private final HttpServletRequest request = mock(HttpServletRequest.class);
     private final SeckillRateLimitAspect aspect = new SeckillRateLimitAspect();
     private SeckillRateLimit rule;
 
@@ -41,30 +40,21 @@ class SeckillRateLimitAspectTest {
         UserDTO user = new UserDTO();
         user.setId(7L);
         UserHolder.saveUser(user);
-        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-
         when(joinPoint.getArgs()).thenReturn(new Object[]{10L});
-        when(request.getHeader("X-Forwarded-For")).thenReturn(null);
-        when(request.getHeader("X-Real-IP")).thenReturn(null);
-        when(request.getHeader("Proxy-Client-IP")).thenReturn(null);
-        when(request.getHeader("WL-Proxy-Client-IP")).thenReturn(null);
-        when(request.getRemoteAddr()).thenReturn("127.0.0.1");
     }
 
     @AfterEach
     void tearDown() {
         UserHolder.removeUser();
-        RequestContextHolder.resetRequestAttributes();
     }
 
     @Test
-    void shouldProceedWhenUserAndIpAreAllowed() throws Throwable {
+    void shouldProceedWhenBothLimitsPass() throws Throwable {
         String userKey = SeckillRedisKeys.rateLimitUserKey(10L, 7L);
-        String ipKey = SeckillRedisKeys.rateLimitIpKey(10L, "127.0.0.1");
+        String voucherKey = SeckillRedisKeys.rateLimitVoucherKey(10L);
         Object expected = new Object();
 
-        when(rateLimitService.tryAcquire(userKey, 5, 10)).thenReturn(true);
-        when(rateLimitService.tryAcquire(ipKey, 50, 10)).thenReturn(true);
+        whenTryAcquire(userKey, voucherKey, SeckillRateLimitResult.PASS);
         when(joinPoint.proceed()).thenReturn(expected);
 
         Object actual = aspect.doAround(joinPoint, rule);
@@ -74,14 +64,42 @@ class SeckillRateLimitAspectTest {
     }
 
     @Test
-    void shouldRejectBeforeBusinessMethodWhenUserLimitIsExceeded() {
+    void shouldRejectWithUserMessageWhenUserLimitIsExceeded() {
         String userKey = SeckillRedisKeys.rateLimitUserKey(10L, 7L);
-        String ipKey = SeckillRedisKeys.rateLimitIpKey(10L, "127.0.0.1");
-        when(rateLimitService.tryAcquire(userKey, 5, 10)).thenReturn(false);
+        String voucherKey = SeckillRedisKeys.rateLimitVoucherKey(10L);
+        whenTryAcquire(userKey, voucherKey, SeckillRateLimitResult.USER_LIMITED);
 
-        assertThrows(RateLimitException.class, () -> aspect.doAround(joinPoint, rule));
+        RateLimitException exception = assertThrows(
+                RateLimitException.class,
+                () -> aspect.doAround(joinPoint, rule));
 
-        verify(rateLimitService, never()).tryAcquire(ipKey, 50, 10);
+        assertEquals(SeckillResultMessages.USER_REQUEST_TOO_FREQUENT, exception.getMessage());
+        verifyBusinessNeverRuns();
+    }
+
+    @Test
+    void shouldRejectWithBusyMessageWhenVoucherLimitIsExceeded() {
+        String userKey = SeckillRedisKeys.rateLimitUserKey(10L, 7L);
+        String voucherKey = SeckillRedisKeys.rateLimitVoucherKey(10L);
+        whenTryAcquire(userKey, voucherKey, SeckillRateLimitResult.VOUCHER_LIMITED);
+
+        RateLimitException exception = assertThrows(
+                RateLimitException.class,
+                () -> aspect.doAround(joinPoint, rule));
+
+        assertEquals(SeckillResultMessages.SECKILL_TOO_BUSY, exception.getMessage());
+        verifyBusinessNeverRuns();
+    }
+
+    private void whenTryAcquire(
+            String userKey,
+            String voucherKey,
+            SeckillRateLimitResult result) {
+        when(rateLimitService.tryAcquire(userKey, 5, 10, voucherKey, 500, 1))
+                .thenReturn(result);
+    }
+
+    private void verifyBusinessNeverRuns() {
         try {
             verify(joinPoint, never()).proceed();
         } catch (Throwable throwable) {

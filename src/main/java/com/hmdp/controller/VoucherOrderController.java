@@ -36,8 +36,8 @@ public class VoucherOrderController {
     @SeckillRateLimit(
             userMaxCount = 5,
             userWindowSeconds = 10,
-            ipMaxCount = 50,
-            ipWindowSeconds = 10
+            voucherMaxCount = 500,
+            voucherWindowSeconds = 1
     )
     public Result seckillVoucher(@PathVariable("id") Long voucherId) {
         return voucherOrderService.seckillVoucher(voucherId);

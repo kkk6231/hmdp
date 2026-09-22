@@ -1,5 +1,6 @@
 package com.hmdp.service.impl;
 
+import com.hmdp.constant.SeckillRateLimitResult;
 import com.hmdp.service.IRateLimitService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,7 +10,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import java.util.Collections;
+import java.util.Arrays;
 
 /**
  * 基于 Redis Lua 固定窗口算法的限流实现。
@@ -30,36 +31,62 @@ public class RedisRateLimitServiceImpl implements IRateLimitService {
     private StringRedisTemplate stringRedisTemplate;
 
     @Override
-    public boolean tryAcquire(String limitKey, long maxCount, long windowSeconds) {
-        validateArguments(limitKey, maxCount, windowSeconds);
+    public SeckillRateLimitResult tryAcquire(
+            String userKey,
+            long userMaxCount,
+            long userWindowSeconds,
+            String voucherKey,
+            long voucherMaxCount,
+            long voucherWindowSeconds) {
+        validateArguments(
+                userKey, userMaxCount, userWindowSeconds,
+                voucherKey, voucherMaxCount, voucherWindowSeconds);
 
-        Long result = stringRedisTemplate.execute(
+        Long resultCode = stringRedisTemplate.execute(
                 RATE_LIMIT_SCRIPT,
-                Collections.singletonList(limitKey),
-                String.valueOf(maxCount),
-                String.valueOf(windowSeconds));
+                Arrays.asList(userKey, voucherKey),
+                String.valueOf(userMaxCount),
+                String.valueOf(userWindowSeconds),
+                String.valueOf(voucherMaxCount),
+                String.valueOf(voucherWindowSeconds));
 
-        if (result == null) {
+        if (resultCode == null) {
             throw new IllegalStateException("执行秒杀限流 Lua 脚本失败");
         }
 
-        boolean allowed = result == 1L;
-        if (!allowed) {
-            log.warn("秒杀请求触发限流，limitKey={}，maxCount={}，windowSeconds={}",
-                    limitKey, maxCount, windowSeconds);
+        SeckillRateLimitResult result;
+        try {
+            result = SeckillRateLimitResult.fromCode(resultCode);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("秒杀限流 Lua 返回未知结果：" + resultCode, e);
         }
-        return allowed;
+
+        if (result != SeckillRateLimitResult.PASS) {
+            log.warn("秒杀请求触发限流，result={}，userKey={}，voucherKey={}",
+                    result, userKey, voucherKey);
+        }
+        return result;
     }
 
-    private void validateArguments(String limitKey, long maxCount, long windowSeconds) {
-        if (limitKey == null || limitKey.trim().isEmpty()) {
+    private void validateArguments(
+            String userKey,
+            long userMaxCount,
+            long userWindowSeconds,
+            String voucherKey,
+            long voucherMaxCount,
+            long voucherWindowSeconds) {
+        if (isBlank(userKey) || isBlank(voucherKey)) {
             throw new IllegalArgumentException("限流 Key 不能为空");
         }
-        if (maxCount <= 0) {
+        if (userMaxCount <= 0 || voucherMaxCount <= 0) {
             throw new IllegalArgumentException("限流最大请求数必须大于 0");
         }
-        if (windowSeconds <= 0) {
+        if (userWindowSeconds <= 0 || voucherWindowSeconds <= 0) {
             throw new IllegalArgumentException("限流窗口必须大于 0");
         }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 }

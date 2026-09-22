@@ -1,22 +1,29 @@
 package com.hmdp.service.impl;
 
+import com.hmdp.constant.SeckillRateLimitResult;
+import com.hmdp.constant.SeckillRedisKeys;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.lang.reflect.Field;
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class RedisRateLimitServiceImplTest {
+
+    private static final String USER_KEY = "seckill:rate:user:10:7";
+    private static final String VOUCHER_KEY = "seckill:rate:voucher:10";
+    private static final List<String> KEYS = Arrays.asList(USER_KEY, VOUCHER_KEY);
 
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
     private final RedisRateLimitServiceImpl rateLimitService = new RedisRateLimitServiceImpl();
@@ -29,37 +36,56 @@ class RedisRateLimitServiceImplTest {
     }
 
     @Test
-    void shouldAllowWhenLuaReturnsOne() {
-        when(redisTemplate.execute(
-                any(RedisScript.class),
-                eq(Collections.singletonList("rate:key")),
-                eq("5"),
-                eq("10"))).thenReturn(1L);
-
-        assertTrue(rateLimitService.tryAcquire("rate:key", 5, 10));
+    void shouldReturnPassWhenLuaReturnsZero() {
+        mockLuaResult(0L);
+        assertEquals(SeckillRateLimitResult.PASS, tryAcquire());
     }
 
     @Test
-    void shouldRejectWhenLuaReturnsZero() {
-        when(redisTemplate.execute(
-                any(RedisScript.class),
-                eq(Collections.singletonList("rate:key")),
-                eq("5"),
-                eq("10"))).thenReturn(0L);
+    void shouldReturnUserLimitedWhenLuaReturnsOne() {
+        mockLuaResult(1L);
+        assertEquals(SeckillRateLimitResult.USER_LIMITED, tryAcquire());
+    }
 
-        assertFalse(rateLimitService.tryAcquire("rate:key", 5, 10));
+    @Test
+    void shouldReturnVoucherLimitedWhenLuaReturnsTwo() {
+        mockLuaResult(2L);
+        assertEquals(SeckillRateLimitResult.VOUCHER_LIMITED, tryAcquire());
     }
 
     @Test
     void shouldFailWhenLuaReturnsNull() {
+        mockLuaResult(null);
+        assertThrows(IllegalStateException.class, this::tryAcquire);
+    }
+
+    @Test
+    void shouldFailWhenLuaReturnsUnknownCode() {
+        mockLuaResult(3L);
+        assertThrows(IllegalStateException.class, this::tryAcquire);
+    }
+
+    @Test
+    void differentUsersAndVouchersShouldUseIndependentKeys() {
+        assertNotEquals(
+                SeckillRedisKeys.rateLimitUserKey(10L, 7L),
+                SeckillRedisKeys.rateLimitUserKey(10L, 8L));
+        assertNotEquals(
+                SeckillRedisKeys.rateLimitVoucherKey(10L),
+                SeckillRedisKeys.rateLimitVoucherKey(11L));
+    }
+
+    private SeckillRateLimitResult tryAcquire() {
+        return rateLimitService.tryAcquire(USER_KEY, 5, 10, VOUCHER_KEY, 3, 1);
+    }
+
+    private void mockLuaResult(Long result) {
         when(redisTemplate.execute(
                 any(RedisScript.class),
-                eq(Collections.singletonList("rate:key")),
+                eq(KEYS),
                 eq("5"),
-                eq("10"))).thenReturn(null);
-
-        assertThrows(
-                IllegalStateException.class,
-                () -> rateLimitService.tryAcquire("rate:key", 5, 10));
+                eq("10"),
+                eq("3"),
+                eq("1"))).thenReturn(result);
     }
 }
