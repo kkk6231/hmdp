@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.constant.MQConstants;
 import com.hmdp.constant.SeckillOrderStatus;
 import com.hmdp.constant.SeckillRedisKeys;
+import com.hmdp.constant.SeckillResultMessages;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.SeckillOrderStatusDTO;
 import com.hmdp.dto.SeckillVoucherMqDTO;
@@ -15,6 +16,7 @@ import com.hmdp.service.IVoucherOrderService;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.rocketmq.client.producer.LocalTransactionState;
 import org.apache.rocketmq.client.producer.SendStatus;
 import org.apache.rocketmq.client.producer.TransactionSendResult;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
@@ -160,52 +162,91 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                         orderId,
                         sendResult == null ? null : sendResult.getSendStatus(),
                         sendResult == null ? null : sendResult.getLocalTransactionState());
-                return Result.fail("系统繁忙，请稍后重试");
+                return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY_LATER);
+            }
+            if (sendResult.getLocalTransactionState() == LocalTransactionState.UNKNOW) {
+                return buildUnknownSeckillResult(orderId);
             }
         } catch (MessagingException e) {
             log.error("秒杀事务消息发送失败，orderId={}，userId={}，voucherId={}",
                     orderId, userId, voucherId, e);
-            if (context.getLuaResult() != null) {
-                return resolveSeckillResult(orderId, context.getLuaResult());
+            if (context.getLuaResult() != null && context.getLuaResult() != SUCCESS) {
+                return resolveSeckillResult(
+                        orderId, userId, voucherId, context.getLuaResult());
             }
-            return Result.fail("系统繁忙，请稍后重试");
+            return buildUnknownSeckillResult(orderId);
         }
 
-        return resolveSeckillResult(orderId, context.getLuaResult());
+        return resolveSeckillResult(
+                orderId, userId, voucherId, context.getLuaResult());
     }
 
     /**
      * 秒杀结果判断
      * @param orderId
+     * @param userId
+     * @param voucherId
      * @param luaResult
      * @return
      */
-    private Result resolveSeckillResult(long orderId, Integer luaResult) {
+    private Result resolveSeckillResult(
+            long orderId, Long userId, Long voucherId, Integer luaResult) {
         if (luaResult == null) {
-            // 本地事务返回 UNKNOWN，最终结果由 Broker 回查决定。
-            log.warn("秒杀本地事务状态未知，返回订单号供后续查询，orderId={}", orderId);
-            return Result.ok(orderId);
+            return buildUnknownSeckillResult(orderId);
         }
         if (luaResult == OUT_OF_STOCK) {
-            return Result.fail("库存不足");
+            return Result.fail(SeckillResultMessages.OUT_OF_STOCK);
         }
         if (luaResult == DUPLICATE_ORDER) {
-            return Result.fail("不能重复下单");
+            return resolveExistingSeckillQualification(userId, voucherId);
         }
         if (luaResult == ACTIVITY_NOT_STARTED) {
-            return Result.fail("秒杀活动尚未开始");
+            return Result.fail(SeckillResultMessages.ACTIVITY_NOT_STARTED);
         }
         if (luaResult == ACTIVITY_ENDED) {
-            return Result.fail("秒杀活动已结束");
+            return Result.fail(SeckillResultMessages.ACTIVITY_ENDED);
         }
         if (luaResult == ACTIVITY_NOT_READY) {
-            return Result.fail("秒杀活动尚未预热，请稍后重试");
+            return Result.fail(SeckillResultMessages.ACTIVITY_NOT_READY);
         }
         if (luaResult != SUCCESS) {
             log.error("秒杀 Lua 返回未知结果，orderId={}，result={}", orderId, luaResult);
-            return Result.fail("秒杀服务异常，请稍后重试");
+            return Result.fail(SeckillResultMessages.SECKILL_SERVICE_ERROR);
         }
         return Result.ok(orderId);
+    }
+
+    /**
+     * UNKNOWN 只表示当前请求无法确认，不能向用户宣称已经获得秒杀资格。
+     * Broker 的事务回查仍会在后台继续执行，用户可以通过重试恢复原订单号。
+     */
+    private Result buildUnknownSeckillResult(long orderId) {
+        log.warn("秒杀本地事务状态未知，提示用户重试，orderId={}", orderId);
+        return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY);
+    }
+
+    /**
+     * 重复请求命中已有秒杀资格时，返回第一次获得资格产生的原订单号。
+     */
+    private Result resolveExistingSeckillQualification(Long userId, Long voucherId) {
+        try {
+            Object existingOrderIdValue = stringRedisTemplate.opsForHash().get(
+                    SeckillRedisKeys.userOrderKey(voucherId), String.valueOf(userId));
+            Long existingOrderId = parseLong(existingOrderIdValue);
+            if (existingOrderId == null || existingOrderId <= 0) {
+                log.warn("Lua 返回重复下单，但未查询到有效的原订单号，userId={}，voucherId={}",
+                        userId, voucherId);
+                return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY_LATER);
+            }
+
+            log.info("用户重复请求命中已有秒杀资格，返回原订单号，userId={}，voucherId={}，orderId={}",
+                    userId, voucherId, existingOrderId);
+            return Result.ok(existingOrderId);
+        } catch (Exception e) {
+            log.error("查询用户已有秒杀资格失败，userId={}，voucherId={}",
+                    userId, voucherId, e);
+            return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY_LATER);
+        }
     }
 
     /**
@@ -214,14 +255,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      */
     private Result validateActivityTime(Long voucherId) {
         if (voucherId == null) {
-            return Result.fail("优惠券不能为空");
+            return Result.fail(SeckillResultMessages.VOUCHER_ID_REQUIRED);
         }
 
         try {
             Map<Object, Object> activityMeta = stringRedisTemplate.opsForHash().entries(
                     SeckillRedisKeys.voucherMetaKey(voucherId));
             if (activityMeta.isEmpty()) {
-                return Result.fail("秒杀活动尚未预热，请稍后重试");
+                return Result.fail(SeckillResultMessages.ACTIVITY_NOT_READY);
             }
 
             Long beginTime = parseLong(
@@ -231,27 +272,27 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             if (beginTime == null || endTime == null || beginTime >= endTime) {
                 log.error("秒杀活动时间元数据非法，voucherId={}，beginTime={}，endTime={}",
                         voucherId, beginTime, endTime);
-                return Result.fail("秒杀活动信息异常，请稍后重试");
+                return Result.fail(SeckillResultMessages.ACTIVITY_INFO_INVALID);
             }
 
             long now = System.currentTimeMillis();
             if (now < beginTime) {
-                return Result.fail("秒杀活动尚未开始");
+                return Result.fail(SeckillResultMessages.ACTIVITY_NOT_STARTED);
             }
             if (now >= endTime) {
-                return Result.fail("秒杀活动已结束");
+                return Result.fail(SeckillResultMessages.ACTIVITY_ENDED);
             }
             return null;
         } catch (Exception e) {
             log.error("读取秒杀活动时间元数据失败，voucherId={}", voucherId, e);
-            return Result.fail("系统繁忙，请稍后重试");
+            return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY_LATER);
         }
     }
 
     @Override
     public Result querySeckillOrderStatus(Long orderId) {
         if (orderId == null) {
-            return Result.fail("订单号不能为空");
+            return Result.fail(SeckillResultMessages.ORDER_ID_REQUIRED);
         }
 
         Long currentUserId = UserHolder.getUser().getId();
@@ -262,7 +303,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             if (!result.isEmpty()) {
                 Long resultUserId = parseLong(result.get("userId"));
                 if (resultUserId == null || !currentUserId.equals(resultUserId)) {
-                    return Result.fail("无权查询该订单");
+                    return Result.fail(SeckillResultMessages.ORDER_ACCESS_DENIED);
                 }
 
                 SeckillOrderStatus status = parseOrderStatus(result.get("status"));
@@ -279,7 +320,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         VoucherOrder voucherOrder = getById(orderId);
         if (voucherOrder != null) {
             if (!currentUserId.equals(voucherOrder.getUserId())) {
-                return Result.fail("无权查询该订单");
+                return Result.fail(SeckillResultMessages.ORDER_ACCESS_DENIED);
             }
 
             try {
@@ -293,9 +334,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         if (!redisAvailable) {
-            return Result.fail("订单状态暂时不可用，请稍后重试");
+            return Result.fail(SeckillResultMessages.ORDER_STATUS_UNAVAILABLE);
         }
-        return Result.fail("订单不存在或处理结果已过期");
+        return Result.fail(SeckillResultMessages.ORDER_NOT_FOUND_OR_EXPIRED);
     }
 
     /**
