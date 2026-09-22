@@ -14,7 +14,7 @@ import javax.annotation.Resource;
 /**
  * 秒杀订单死信消费者。
  *
- * <p>默认关闭，完成真实故障测试后再开启。处理成功前不会吞掉死信。</p>
+ * <p>由配置决定是否启用；处理成功前不会吞掉死信。</p>
  */
 @Slf4j
 @Component

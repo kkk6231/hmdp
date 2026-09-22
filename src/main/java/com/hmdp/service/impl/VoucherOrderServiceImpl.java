@@ -2,6 +2,7 @@ package com.hmdp.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.constant.MQConstants;
+import com.hmdp.constant.SeckillLuaResultCode;
 import com.hmdp.constant.SeckillOrderStatus;
 import com.hmdp.constant.SeckillRedisKeys;
 import com.hmdp.constant.SeckillResultMessages;
@@ -38,16 +39,6 @@ import javax.annotation.Resource;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-
-import static com.hmdp.constant.SeckillLuaResultCode.DUPLICATE_ORDER;
-import static com.hmdp.constant.SeckillLuaResultCode.OUT_OF_STOCK;
-import static com.hmdp.constant.SeckillLuaResultCode.SUCCESS;
-import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_ENDED;
-import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_READY;
-import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_STARTED;
-import static com.hmdp.constant.SeckillRedisKeys.ORDER_FAILED_TTL_SECONDS;
-import static com.hmdp.constant.SeckillRedisKeys.ORDER_PENDING_KEY;
-import static com.hmdp.constant.SeckillRedisKeys.ORDER_SUCCESS_TTL_SECONDS;
 
 /**
  * <p>
@@ -91,19 +82,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Value("${hmdp.mq.order-lock-wait-millis:200}")
     private long orderLockWaitMillis;
-
-    /**
-     * 故障注入仅用于验证消费重试和 DLQ，正常运行必须保持为 false。
-     */
-    @Value("${hmdp.mq.fault-injection.force-consumer-failure-before-db:false}")
-    private boolean forceConsumerFailureBeforeDb;
-
-    /**
-     * 故障注入仅用于验证数据库已提交、Redis SUCCESS 尚未写入时的幂等恢复。
-     */
-    @Value("${hmdp.mq.fault-injection.force-consumer-failure-after-db-commit:false}")
-    private boolean forceConsumerFailureAfterDbCommit;
-
 
     /**
      * 优惠券秒杀
@@ -170,7 +148,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         } catch (MessagingException e) {
             log.error("秒杀事务消息发送失败，orderId={}，userId={}，voucherId={}",
                     orderId, userId, voucherId, e);
-            if (context.getLuaResult() != null && context.getLuaResult() != SUCCESS) {
+            if (context.getLuaResult() != null
+                    && context.getLuaResult() != SeckillLuaResultCode.SUCCESS) {
                 return resolveSeckillResult(
                         orderId, userId, voucherId, context.getLuaResult());
             }
@@ -194,22 +173,22 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (luaResult == null) {
             return buildUnknownSeckillResult(orderId);
         }
-        if (luaResult == OUT_OF_STOCK) {
+        if (luaResult == SeckillLuaResultCode.OUT_OF_STOCK) {
             return Result.fail(SeckillResultMessages.OUT_OF_STOCK);
         }
-        if (luaResult == DUPLICATE_ORDER) {
+        if (luaResult == SeckillLuaResultCode.DUPLICATE_ORDER) {
             return resolveExistingSeckillQualification(userId, voucherId);
         }
-        if (luaResult == ACTIVITY_NOT_STARTED) {
+        if (luaResult == SeckillLuaResultCode.ACTIVITY_NOT_STARTED) {
             return Result.fail(SeckillResultMessages.ACTIVITY_NOT_STARTED);
         }
-        if (luaResult == ACTIVITY_ENDED) {
+        if (luaResult == SeckillLuaResultCode.ACTIVITY_ENDED) {
             return Result.fail(SeckillResultMessages.ACTIVITY_ENDED);
         }
-        if (luaResult == ACTIVITY_NOT_READY) {
+        if (luaResult == SeckillLuaResultCode.ACTIVITY_NOT_READY) {
             return Result.fail(SeckillResultMessages.ACTIVITY_NOT_READY);
         }
-        if (luaResult != SUCCESS) {
+        if (luaResult != SeckillLuaResultCode.SUCCESS) {
             log.error("秒杀 Lua 返回未知结果，orderId={}，result={}", orderId, luaResult);
             return Result.fail(SeckillResultMessages.SECKILL_SERVICE_ERROR);
         }
@@ -346,13 +325,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Override
     public void createVoucherOrder(SeckillVoucherMqDTO message) {
         validateMessage(message);
-        if (forceConsumerFailureBeforeDb) {
-            log.warn("[故障注入] 消费者在数据库事务前强制失败，orderId={}",
-                    message.getOrderId());
-            throw new IllegalStateException(
-                    "[故障注入] 消费者在数据库事务前强制失败，orderId=" + message.getOrderId());
-        }
-
         executeWithOrderLock(
                 message.getOrderId(),
                 () -> doCreateVoucherOrder(message));
@@ -413,12 +385,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 throw new IllegalStateException(
                         "秒杀订单事务执行结果异常，orderId=" + message.getOrderId());
             }
-            if (forceConsumerFailureAfterDbCommit) {
-                log.warn("[故障注入] 数据库事务已提交，在写入 Redis SUCCESS 前强制失败，orderId={}",
-                        message.getOrderId());
-                throw new IllegalStateException(
-                        "[故障注入] 数据库事务提交后强制失败，orderId=" + message.getOrderId());
-            }
 
             log.info("秒杀订单创建成功，orderId={}，userId={}，voucherId={}",
                     message.getOrderId(), message.getUserId(), message.getVoucherId());
@@ -478,10 +444,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                         SeckillRedisKeys.stockKey(message.getVoucherId()),
                         SeckillRedisKeys.userOrderKey(message.getVoucherId()),
                         SeckillRedisKeys.orderResultKey(message.getOrderId()),
-                        ORDER_PENDING_KEY),
+                        SeckillRedisKeys.ORDER_PENDING_KEY),
                 String.valueOf(message.getUserId()),
                 String.valueOf(message.getOrderId()),
-                String.valueOf(ORDER_FAILED_TTL_SECONDS),
+                String.valueOf(SeckillRedisKeys.ORDER_FAILED_TTL_SECONDS),
                 "DLQ_RETRIES_EXHAUSTED",
                 String.valueOf(System.currentTimeMillis()));
 
@@ -550,7 +516,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
         if (status == SeckillOrderStatus.SUCCESS || status == SeckillOrderStatus.FAILED) {
-            stringRedisTemplate.opsForZSet().remove(ORDER_PENDING_KEY, String.valueOf(orderId));
+            stringRedisTemplate.opsForZSet().remove(
+                    SeckillRedisKeys.ORDER_PENDING_KEY, String.valueOf(orderId));
             return;
         }
 
@@ -599,9 +566,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         String resultKey = SeckillRedisKeys.orderResultKey(orderId);
         Long result = stringRedisTemplate.execute(
                 ORDER_SUCCESS_SCRIPT,
-                Arrays.asList(resultKey, ORDER_PENDING_KEY),
+                Arrays.asList(resultKey, SeckillRedisKeys.ORDER_PENDING_KEY),
                 String.valueOf(orderId), String.valueOf(userId), String.valueOf(voucherId),
-                String.valueOf(ORDER_SUCCESS_TTL_SECONDS),
+                String.valueOf(SeckillRedisKeys.ORDER_SUCCESS_TTL_SECONDS),
                 String.valueOf(System.currentTimeMillis()));
         if (result == null) {
             throw new IllegalStateException("秒杀订单 SUCCESS Lua 未返回结果，orderId=" + orderId);

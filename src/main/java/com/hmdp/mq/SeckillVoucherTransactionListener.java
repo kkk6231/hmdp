@@ -7,7 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -54,13 +53,6 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
     private StringRedisTemplate stringRedisTemplate;
 
     /**
-     * 仅用于验证 Broker 事务回查：Lua 成功后强制返回 UNKNOWN。
-     * 正常运行必须保持为 false。
-     */
-    @Value("${hmdp.mq.fault-injection.force-transaction-unknown-after-lua:false}")
-    private boolean forceTransactionUnknownAfterLua;
-
-    /**
      * 执行本地事务
      * @param message
      * @param arg
@@ -85,11 +77,6 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
             int resultCode = result.intValue();
             context.setLuaResult(resultCode);
             if (resultCode == SUCCESS) {
-                if (forceTransactionUnknownAfterLua) {
-                    log.warn("[故障注入] Lua 已成功，强制返回 UNKNOWN，等待 Broker 回查，orderId={}",
-                            context.getOrderId());
-                    return RocketMQLocalTransactionState.UNKNOWN;
-                }
                 log.info("秒杀本地事务执行成功，提交事务消息，orderId={}", context.getOrderId());
                 return RocketMQLocalTransactionState.COMMIT;
             }

@@ -28,16 +28,12 @@ rocketmq:
 
 hmdp:
   mq:
-    dlq-consumer-enabled: false # 完成 DLQ 故障测试后再开启
-    processing-scan-enabled: false # 完成 PROCESSING 扫描测试后再开启
+    dlq-consumer-enabled: false # 是否启用死信补偿消费者
+    processing-scan-enabled: false # 是否启用 PROCESSING 超时扫描
     processing-timeout-seconds: 300 # 超过 5 分钟仍未完成则进入核对
     processing-scan-interval-ms: 60000 # 每分钟扫描一次
     processing-scan-batch-size: 100 # 单次最多核对 100 个订单
     order-lock-wait-millis: 200 # 同一 orderId 锁的最长等待时间，失败后交给 RocketMQ 重试
-    fault-injection:
-      force-transaction-unknown-after-lua: false # 仅用于事务回查测试，正常运行必须保持为 false
-      force-consumer-failure-before-db: false # 验证消费者重试与 DLQ，开启后每次消费都在数据库事务前失败
-      force-consumer-failure-after-db-commit: false # 验证数据库已提交但 Redis SUCCESS 未写入时的幂等恢复
 
 mybatis-plus:
   type-aliases-package: com.hmdp.entity # 别名扫描包
