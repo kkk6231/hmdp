@@ -40,6 +40,9 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.constant.SeckillLuaResultCode.DUPLICATE_ORDER;
 import static com.hmdp.constant.SeckillLuaResultCode.OUT_OF_STOCK;
 import static com.hmdp.constant.SeckillLuaResultCode.SUCCESS;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_ENDED;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_READY;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_STARTED;
 import static com.hmdp.constant.SeckillRedisKeys.ORDER_FAILED_TTL_SECONDS;
 import static com.hmdp.constant.SeckillRedisKeys.ORDER_PENDING_KEY;
 import static com.hmdp.constant.SeckillRedisKeys.ORDER_SUCCESS_TTL_SECONDS;
@@ -108,6 +111,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Override
     public Result seckillVoucher(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
+
+        // 第一层时间校验：在发送 Half Message 前快速拒绝无效请求。
+        // Lua 会使用 Redis TIME 再次校验，避免活动边界处的并发时间窗口。
+        Result activityTimeResult = validateActivityTime(voucherId);
+        if (activityTimeResult != null) {
+            return activityTimeResult;
+        }
+
         long orderId = redisIdWorker.nextId("order"); // 生成订单号
 
         // 消费者最终会收到的消息
@@ -181,11 +192,60 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (luaResult == DUPLICATE_ORDER) {
             return Result.fail("不能重复下单");
         }
+        if (luaResult == ACTIVITY_NOT_STARTED) {
+            return Result.fail("秒杀活动尚未开始");
+        }
+        if (luaResult == ACTIVITY_ENDED) {
+            return Result.fail("秒杀活动已结束");
+        }
+        if (luaResult == ACTIVITY_NOT_READY) {
+            return Result.fail("秒杀活动尚未预热，请稍后重试");
+        }
         if (luaResult != SUCCESS) {
             log.error("秒杀 Lua 返回未知结果，orderId={}，result={}", orderId, luaResult);
             return Result.fail("秒杀服务异常，请稍后重试");
         }
         return Result.ok(orderId);
+    }
+
+    /**
+     * 发送 Half Message 前的快速时间校验。这里只用于减少无效消息，
+     * 最终是否允许获得资格仍由 Lua 中的 Redis TIME 判断决定。
+     */
+    private Result validateActivityTime(Long voucherId) {
+        if (voucherId == null) {
+            return Result.fail("优惠券不能为空");
+        }
+
+        try {
+            Map<Object, Object> activityMeta = stringRedisTemplate.opsForHash().entries(
+                    SeckillRedisKeys.voucherMetaKey(voucherId));
+            if (activityMeta.isEmpty()) {
+                return Result.fail("秒杀活动尚未预热，请稍后重试");
+            }
+
+            Long beginTime = parseLong(
+                    activityMeta.get(SeckillRedisKeys.VOUCHER_BEGIN_TIME_FIELD));
+            Long endTime = parseLong(
+                    activityMeta.get(SeckillRedisKeys.VOUCHER_END_TIME_FIELD));
+            if (beginTime == null || endTime == null || beginTime >= endTime) {
+                log.error("秒杀活动时间元数据非法，voucherId={}，beginTime={}，endTime={}",
+                        voucherId, beginTime, endTime);
+                return Result.fail("秒杀活动信息异常，请稍后重试");
+            }
+
+            long now = System.currentTimeMillis();
+            if (now < beginTime) {
+                return Result.fail("秒杀活动尚未开始");
+            }
+            if (now >= endTime) {
+                return Result.fail("秒杀活动已结束");
+            }
+            return null;
+        } catch (Exception e) {
+            log.error("读取秒杀活动时间元数据失败，voucherId={}", voucherId, e);
+            return Result.fail("系统繁忙，请稍后重试");
+        }
     }
 
     @Override

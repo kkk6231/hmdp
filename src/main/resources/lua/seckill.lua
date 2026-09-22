@@ -4,6 +4,7 @@ local userOrderKey = KEYS[2]
 local transactionKey = KEYS[3]
 local orderResultKey = KEYS[4]
 local pendingKey = KEYS[5]
+local activityMetaKey = KEYS[6]
 
 -- 2. 参数列表
 local userId = ARGV[1]
@@ -42,8 +43,46 @@ end
 if transactionState == 'ROLLBACK:DUPLICATE' then
     return 2
 end
+if transactionState == 'ROLLBACK:NOT_STARTED' then
+    return 3
+end
+if transactionState == 'ROLLBACK:ENDED' then
+    return 4
+end
+if transactionState == 'ROLLBACK:NOT_READY' then
+    return 5
+end
 
--- 4. 判断用户是否已经获得该券资格
+-- 4. 使用 Redis 服务器时间校验活动时间。
+-- 活动元数据与库存一起预热，但保留到活动结束后的恢复窗口，
+-- 因此不能通过库存 Key 是否存在来判断活动是否仍在进行。
+local beginTimeValue = redis.call('hget', activityMetaKey, 'beginTime')
+local endTimeValue = redis.call('hget', activityMetaKey, 'endTime')
+if not beginTimeValue or not endTimeValue then
+    redis.call('set', transactionKey, 'ROLLBACK:NOT_READY', 'EX', transactionTtlSeconds)
+    return 5
+end
+
+local beginTime = tonumber(beginTimeValue)
+local endTime = tonumber(endTimeValue)
+if not beginTime or not endTime or beginTime >= endTime then
+    redis.call('set', transactionKey, 'ROLLBACK:NOT_READY', 'EX', transactionTtlSeconds)
+    return 5
+end
+
+local redisTime = redis.call('TIME')
+local nowMillis = tonumber(redisTime[1]) * 1000
+        + math.floor(tonumber(redisTime[2]) / 1000)
+if nowMillis < beginTime then
+    redis.call('set', transactionKey, 'ROLLBACK:NOT_STARTED', 'EX', transactionTtlSeconds)
+    return 3
+end
+if nowMillis >= endTime then
+    redis.call('set', transactionKey, 'ROLLBACK:ENDED', 'EX', transactionTtlSeconds)
+    return 4
+end
+
+-- 5. 判断用户是否已经获得该券资格
 local existingOrderId = redis.call('hget', userOrderKey, userId)
 if existingOrderId then
     if existingOrderId == orderId then
@@ -57,11 +96,11 @@ if existingOrderId then
     return 2
 end
 
--- 5. 判断库存。库存 Key 不存在也统一按库存不足处理
+-- 6. 判断库存。库存 Key 不存在说明预热数据不完整或已经过期
 local stockValue = redis.call('get', stockKey)
 if not stockValue then
-    redis.call('set', transactionKey, 'ROLLBACK:OUT_OF_STOCK', 'EX', transactionTtlSeconds)
-    return 1
+    redis.call('set', transactionKey, 'ROLLBACK:NOT_READY', 'EX', transactionTtlSeconds)
+    return 5
 end
 
 local stock = tonumber(stockValue)
@@ -70,7 +109,7 @@ if not stock or stock <= 0 then
     return 1
 end
 
--- 6. 原子预扣库存、保存用户订单映射并记录 MQ 本地事务结果
+-- 7. 原子预扣库存、保存用户订单映射并记录 MQ 本地事务结果
 redis.call('incrby', stockKey, -1)
 redis.call('hset', userOrderKey, userId, orderId)
 local stockTtl = redis.call('ttl', stockKey)

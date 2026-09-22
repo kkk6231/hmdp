@@ -20,8 +20,14 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.constant.SeckillLuaResultCode.DUPLICATE_ORDER;
 import static com.hmdp.constant.SeckillLuaResultCode.OUT_OF_STOCK;
 import static com.hmdp.constant.SeckillLuaResultCode.SUCCESS;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_ENDED;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_READY;
+import static com.hmdp.constant.SeckillLuaResultCode.ACTIVITY_NOT_STARTED;
 import static com.hmdp.constant.SeckillMqTransactionState.COMMIT;
 import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_DUPLICATE;
+import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_ENDED;
+import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_NOT_READY;
+import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_NOT_STARTED;
 import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_OUT_OF_STOCK;
 import static com.hmdp.constant.SeckillRedisKeys.MQ_TRANSACTION_TTL_SECONDS;
 import static com.hmdp.constant.SeckillRedisKeys.ORDER_PENDING_KEY;
@@ -87,7 +93,11 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
                 log.info("秒杀本地事务执行成功，提交事务消息，orderId={}", context.getOrderId());
                 return RocketMQLocalTransactionState.COMMIT;
             }
-            if (resultCode == OUT_OF_STOCK || resultCode == DUPLICATE_ORDER) {
+            if (resultCode == OUT_OF_STOCK
+                    || resultCode == DUPLICATE_ORDER
+                    || resultCode == ACTIVITY_NOT_STARTED
+                    || resultCode == ACTIVITY_ENDED
+                    || resultCode == ACTIVITY_NOT_READY) {
                 log.info("秒杀业务校验未通过，回滚事务消息，orderId={}，result={}",
                         context.getOrderId(), resultCode);
                 return RocketMQLocalTransactionState.ROLLBACK;
@@ -124,7 +134,10 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
                 return RocketMQLocalTransactionState.COMMIT;
             }
             if (ROLLBACK_OUT_OF_STOCK.equals(transactionState)
-                    || ROLLBACK_DUPLICATE.equals(transactionState)) {
+                    || ROLLBACK_DUPLICATE.equals(transactionState)
+                    || ROLLBACK_NOT_STARTED.equals(transactionState)
+                    || ROLLBACK_ENDED.equals(transactionState)
+                    || ROLLBACK_NOT_READY.equals(transactionState)) {
                 log.info("事务回查确认回滚，orderId={}，transactionState={}",
                         orderId, transactionState);
                 return RocketMQLocalTransactionState.ROLLBACK;
@@ -161,13 +174,14 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
     private Long executeSeckillLua(Long orderId, Long userId, Long voucherId) {
         String stockKey = SeckillRedisKeys.stockKey(voucherId);
         String userOrderKey = SeckillRedisKeys.userOrderKey(voucherId);
+        String activityMetaKey = SeckillRedisKeys.voucherMetaKey(voucherId);
         String transactionKey = SeckillRedisKeys.transactionKey(orderId);
         String orderResultKey = SeckillRedisKeys.orderResultKey(orderId);
         return stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Arrays.asList(
                         stockKey, userOrderKey, transactionKey,
-                        orderResultKey, ORDER_PENDING_KEY),
+                        orderResultKey, ORDER_PENDING_KEY, activityMetaKey),
                 String.valueOf(userId), String.valueOf(orderId), String.valueOf(voucherId),
                 String.valueOf(MQ_TRANSACTION_TTL_SECONDS),
                 String.valueOf(System.currentTimeMillis())
