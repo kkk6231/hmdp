@@ -32,6 +32,13 @@ build/
 ### VS Code ###
 .vscode/
 
+### Local environment and secrets ###
+.env
+.env.*
+!.env.example
+src/main/resources/application-local.yml
+src/main/resources/application-local.yaml
+
 ### Local Codex artifacts and design documents ###
 .codex-tmp/
 RocketMQ全链路说明.md
