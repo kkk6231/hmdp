@@ -3,17 +3,15 @@ package com.hmdp.mq;
 import com.hmdp.constant.MQConstants;
 import com.hmdp.constant.SeckillRedisKeys;
 import com.hmdp.dto.SeckillVoucherTransactionContext;
+import com.hmdp.service.ISeckillVoucherService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.messaging.Message;
 
 import javax.annotation.Resource;
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.constant.SeckillLuaResultCode.DUPLICATE_ORDER;
@@ -29,34 +27,23 @@ import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_NOT_READY;
 import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_NOT_STARTED;
 import static com.hmdp.constant.SeckillMqTransactionState.ROLLBACK_OUT_OF_STOCK;
 import static com.hmdp.constant.SeckillRedisKeys.MQ_TRANSACTION_TTL_SECONDS;
-import static com.hmdp.constant.SeckillRedisKeys.ORDER_PENDING_KEY;
 
+/**
+ * RocketMQ 事务消息适配层：将秒杀券服务的资格预留结果映射成消息事务状态，
+ * 并在 Broker 回查时根据 Redis 中持久化的事实恢复提交或回滚决策。
+ */
 @Slf4j
 @RocketMQTransactionListener
 public class SeckillVoucherTransactionListener implements RocketMQLocalTransactionListener {
 
-    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
-    private static final DefaultRedisScript<Long> ORDER_PROCESSING_SCRIPT;
-
-    static {
-        SECKILL_SCRIPT = new DefaultRedisScript<>();
-        SECKILL_SCRIPT.setLocation(new ClassPathResource("lua/seckill.lua"));
-        SECKILL_SCRIPT.setResultType(Long.class);
-
-        ORDER_PROCESSING_SCRIPT = new DefaultRedisScript<>();
-        ORDER_PROCESSING_SCRIPT.setLocation(
-                new ClassPathResource("lua/seckill_order_processing.lua"));
-        ORDER_PROCESSING_SCRIPT.setResultType(Long.class);
-    }
-
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private ISeckillVoucherService seckillVoucherService;
 
     /**
-     * 执行本地事务
-     * @param message
-     * @param arg
-     * @return
+     * Half Message 写入 Broker 后执行 Redis 资格预留。
+     * Lua 明确成功才提交；明确的业务拒绝才回滚；无法判断时交给 Broker 回查。
      */
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message message, Object arg) {
@@ -67,13 +54,14 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
 
         SeckillVoucherTransactionContext context = (SeckillVoucherTransactionContext) arg;
         try {
-            Long result = executeSeckillLua(
+            Long result = seckillVoucherService.reserveQualification(
                     context.getOrderId(), context.getUserId(), context.getVoucherId());
             if (result == null) {
                 log.error("秒杀 Lua 未返回结果，orderId={}", context.getOrderId());
                 return RocketMQLocalTransactionState.UNKNOWN;
             }
 
+            // 同步发送线程通过 context 读取结果并决定给用户的返回内容。
             int resultCode = result.intValue();
             context.setLuaResult(resultCode);
             if (resultCode == SUCCESS) {
@@ -102,9 +90,8 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
     }
 
     /**
-     * 事务回查
-     * @param message
-     * @return
+     * Broker 收不到明确事务决议时回查 Redis。
+     * 回查不会再次预扣库存，只读取事务状态或用户资格映射。
      */
     @Override
     public RocketMQLocalTransactionState checkLocalTransaction(Message message) {
@@ -113,10 +100,11 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
             Long userId = getLongHeader(message, MQConstants.SECKILL_USER_ID_HEADER);
             Long voucherId = getLongHeader(message, MQConstants.SECKILL_VOUCHER_ID_HEADER);
 
+            // 优先使用 Lua 写下的事务结论，避免把业务回滚误判为成功。
             String transactionKey = SeckillRedisKeys.transactionKey(orderId);
             String transactionState = stringRedisTemplate.opsForValue().get(transactionKey);
             if (COMMIT.equals(transactionState)) {
-                ensureOrderProcessing(orderId, userId, voucherId);
+                seckillVoucherService.ensureOrderProcessing(orderId, userId, voucherId);
                 log.info("事务回查确认提交，orderId={}", orderId);
                 return RocketMQLocalTransactionState.COMMIT;
             }
@@ -131,16 +119,15 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
             }
 
             // 事务状态丢失时，再用 userId -> orderId 的资格记录进行一次兜底判断。
-            String userOrderKey = SeckillRedisKeys.userOrderKey(voucherId);
-            Object existingOrderId = stringRedisTemplate.opsForHash().get(
-                    userOrderKey, String.valueOf(userId));
-            if (existingOrderId != null && String.valueOf(orderId).equals(existingOrderId.toString())) {
+            String existingOrderId = seckillVoucherService.findExistingOrderIdValue(userId, voucherId);
+            if (existingOrderId != null && String.valueOf(orderId).equals(existingOrderId)) {
                 stringRedisTemplate.opsForValue().set(
                         transactionKey, COMMIT, MQ_TRANSACTION_TTL_SECONDS, TimeUnit.SECONDS);
-                ensureOrderProcessing(orderId, userId, voucherId);
+                seckillVoucherService.ensureOrderProcessing(orderId, userId, voucherId);
                 log.warn("事务状态缺失，通过用户订单映射恢复 COMMIT，orderId={}", orderId);
                 return RocketMQLocalTransactionState.COMMIT;
             }
+            // 用户资格指向另一个订单时，当前 Half Message 不应被投递。
             if (existingOrderId != null) {
                 stringRedisTemplate.opsForValue().set(
                         transactionKey, ROLLBACK_DUPLICATE,
@@ -150,6 +137,7 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
                 return RocketMQLocalTransactionState.ROLLBACK;
             }
 
+            // 两种证据都不存在时不能猜测结果；继续 UNKNOWN 等待后续回查。
             log.warn("事务回查暂时无法确定结果，orderId={}", orderId);
             return RocketMQLocalTransactionState.UNKNOWN;
         } catch (Exception e) {
@@ -158,36 +146,7 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
         }
     }
 
-    private Long executeSeckillLua(Long orderId, Long userId, Long voucherId) {
-        String stockKey = SeckillRedisKeys.stockKey(voucherId);
-        String userOrderKey = SeckillRedisKeys.userOrderKey(voucherId);
-        String activityMetaKey = SeckillRedisKeys.voucherMetaKey(voucherId);
-        String transactionKey = SeckillRedisKeys.transactionKey(orderId);
-        String orderResultKey = SeckillRedisKeys.orderResultKey(orderId);
-        return stringRedisTemplate.execute(
-                SECKILL_SCRIPT,
-                Arrays.asList(
-                        stockKey, userOrderKey, transactionKey,
-                        orderResultKey, ORDER_PENDING_KEY, activityMetaKey),
-                String.valueOf(userId), String.valueOf(orderId), String.valueOf(voucherId),
-                String.valueOf(MQ_TRANSACTION_TTL_SECONDS),
-                String.valueOf(System.currentTimeMillis())
-        );
-    }
-
-    /**
-     * 回查确认 Redis 资格已成功时，补齐可能丢失的 PROCESSING 状态。
-     * 已经结束的 SUCCESS/FAILED 状态不能被降级。
-     */
-    private void ensureOrderProcessing(Long orderId, Long userId, Long voucherId) {
-        String resultKey = SeckillRedisKeys.orderResultKey(orderId);
-        stringRedisTemplate.execute(
-                ORDER_PROCESSING_SCRIPT,
-                Arrays.asList(resultKey, ORDER_PENDING_KEY),
-                String.valueOf(orderId), String.valueOf(userId), String.valueOf(voucherId),
-                String.valueOf(System.currentTimeMillis()));
-    }
-
+    /** 回查没有发送线程的 context，因此必须从持久化的消息 Header 还原业务 ID。 */
     private Long getLongHeader(Message message, String headerName) {
         Object value = message.getHeaders().get(headerName);
         if (value == null) {

@@ -41,12 +41,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
+ * 秒杀下单与订单结果服务。请求线程负责发送事务消息，不直接写订单；
+ * 消费线程在数据库事务内扣库存并建单，失败后的状态修复由重试、死信和扫描入口处理。
  */
 @Slf4j
 @Service
@@ -84,9 +80,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private long orderLockWaitMillis;
 
     /**
-     * 优惠券秒杀
-     * @param voucherId
-     * @return
+     * 发起秒杀：快速校验活动、生成订单号，再发送 RocketMQ 事务消息。
+     * 返回的订单号表示已获得秒杀资格；数据库订单由消费者异步创建。
      */
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -94,11 +89,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         // 第一层时间校验：在发送 Half Message 前快速拒绝无效请求。
         // Lua 会使用 Redis TIME 再次校验，避免活动边界处的并发时间窗口。
-        Result activityTimeResult = validateActivityTime(voucherId);
+        Result activityTimeResult = seckillVoucherService.validateActivityTime(voucherId);
         if (activityTimeResult != null) {
             return activityTimeResult;
         }
 
+        // 先固定订单号；消息、Redis 资格和最终数据库订单都使用同一个 ID。
         long orderId = redisIdWorker.nextId("order"); // 生成订单号
 
         // 消费者最终会收到的消息
@@ -116,7 +112,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .setHeader(MQConstants.SECKILL_VOUCHER_ID_HEADER, String.valueOf(voucherId))
                 .build();
 
-        // 本地事务上下文，用于存放 lua 执行结果
+        // 本地事务上下文只在发送线程和回调之间共享；Broker 回查依赖消息 Header。
         SeckillVoucherTransactionContext context =
                 new SeckillVoucherTransactionContext(orderId, userId, voucherId);
 
@@ -135,6 +131,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     context
             );
 
+            // 发送状态异常不代表 Redis Lua 一定没执行，不能在这里回补库存。
             if (sendResult == null || sendResult.getSendStatus() != SendStatus.SEND_OK) {
                 log.error("秒杀事务消息发送状态异常，orderId={}，sendStatus={}，localState={}",
                         orderId,
@@ -148,6 +145,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         } catch (MessagingException e) {
             log.error("秒杀事务消息发送失败，orderId={}，userId={}，voucherId={}",
                     orderId, userId, voucherId, e);
+            // 已取得明确的业务拒绝码时可直接返回；其余情况保留未知语义供重试。
             if (context.getLuaResult() != null
                     && context.getLuaResult() != SeckillLuaResultCode.SUCCESS) {
                 return resolveSeckillResult(
@@ -161,12 +159,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     /**
-     * 秒杀结果判断
-     * @param orderId
-     * @param userId
-     * @param voucherId
-     * @param luaResult
-     * @return
+     * 将资格 Lua 的返回码转换成用户可理解的结果。
+     * 重复请求返回首次获得资格的订单号，避免让同一用户看到两个订单号。
      */
     private Result resolveSeckillResult(
             long orderId, Long userId, Long voucherId, Integer luaResult) {
@@ -209,9 +203,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      */
     private Result resolveExistingSeckillQualification(Long userId, Long voucherId) {
         try {
-            Object existingOrderIdValue = stringRedisTemplate.opsForHash().get(
-                    SeckillRedisKeys.userOrderKey(voucherId), String.valueOf(userId));
-            Long existingOrderId = parseLong(existingOrderIdValue);
+            Long existingOrderId = parseLong(
+                    seckillVoucherService.findExistingOrderIdValue(userId, voucherId));
             if (existingOrderId == null || existingOrderId <= 0) {
                 log.warn("Lua 返回重复下单，但未查询到有效的原订单号，userId={}，voucherId={}",
                         userId, voucherId);
@@ -229,45 +222,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     /**
-     * 发送 Half Message 前的快速时间校验。这里只用于减少无效消息，
-     * 最终是否允许获得资格仍由 Lua 中的 Redis TIME 判断决定。
+     * 查询当前用户的异步订单结果。优先读取 Redis；结果不存在或 Redis 异常时，
+     * 再用数据库中的已落地订单兜底，并尝试回填 SUCCESS。
      */
-    private Result validateActivityTime(Long voucherId) {
-        if (voucherId == null) {
-            return Result.fail(SeckillResultMessages.VOUCHER_ID_REQUIRED);
-        }
-
-        try {
-            Map<Object, Object> activityMeta = stringRedisTemplate.opsForHash().entries(
-                    SeckillRedisKeys.voucherMetaKey(voucherId));
-            if (activityMeta.isEmpty()) {
-                return Result.fail(SeckillResultMessages.ACTIVITY_NOT_READY);
-            }
-
-            Long beginTime = parseLong(
-                    activityMeta.get(SeckillRedisKeys.VOUCHER_BEGIN_TIME_FIELD));
-            Long endTime = parseLong(
-                    activityMeta.get(SeckillRedisKeys.VOUCHER_END_TIME_FIELD));
-            if (beginTime == null || endTime == null || beginTime >= endTime) {
-                log.error("秒杀活动时间元数据非法，voucherId={}，beginTime={}，endTime={}",
-                        voucherId, beginTime, endTime);
-                return Result.fail(SeckillResultMessages.ACTIVITY_INFO_INVALID);
-            }
-
-            long now = System.currentTimeMillis();
-            if (now < beginTime) {
-                return Result.fail(SeckillResultMessages.ACTIVITY_NOT_STARTED);
-            }
-            if (now >= endTime) {
-                return Result.fail(SeckillResultMessages.ACTIVITY_ENDED);
-            }
-            return null;
-        } catch (Exception e) {
-            log.error("读取秒杀活动时间元数据失败，voucherId={}", voucherId, e);
-            return Result.fail(SeckillResultMessages.SYSTEM_BUSY_RETRY_LATER);
-        }
-    }
-
     @Override
     public Result querySeckillOrderStatus(Long orderId) {
         if (orderId == null) {
@@ -280,6 +237,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         try {
             Map<Object, Object> result = stringRedisTemplate.opsForHash().entries(resultKey);
             if (!result.isEmpty()) {
+                // 状态结果携带用户 ID，不能只凭订单号向其他用户泄露处理状态。
                 Long resultUserId = parseLong(result.get("userId"));
                 if (resultUserId == null || !currentUserId.equals(resultUserId)) {
                     return Result.fail(SeckillResultMessages.ORDER_ACCESS_DENIED);
@@ -296,6 +254,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.warn("查询 Redis 秒杀订单状态失败，回退查询数据库，orderId={}", orderId, e);
         }
 
+        // Redis 无结果时，数据库订单是最终成功事实。
         VoucherOrder voucherOrder = getById(orderId);
         if (voucherOrder != null) {
             if (!currentUserId.equals(voucherOrder.getUserId())) {
@@ -319,8 +278,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     /**
-     * 扣减库存 + 创建订单 （消费者调用）
-     * @param message
+     * 正常消费者入口。先校验消息，再按 orderId 加锁，避免与死信补偿并发处理同一单。
      */
     @Override
     public void createVoucherOrder(SeckillVoucherMqDTO message) {
@@ -330,6 +288,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 () -> doCreateVoucherOrder(message));
     }
 
+    /**
+     * 幂等消费：先核对已有订单和 Redis 终态，再将数据库扣库存、插入订单放在同一事务。
+     * 数据库提交后才写 Redis SUCCESS；写失败会抛给 MQ 触发重试。
+     */
     private void doCreateVoucherOrder(SeckillVoucherMqDTO message) {
         SeckillOrderStatus redisStatus = getStoredOrderStatus(message.getOrderId());
 
@@ -348,6 +310,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             throw new IllegalStateException("订单号已被其他订单占用，orderId=" + message.getOrderId());
         }
 
+        // 已补偿的消息即使迟到，也不能再次扣减数据库库存。
         if (redisStatus == SeckillOrderStatus.FAILED) {
             log.warn("订单已经完成库存补偿，忽略迟到或人工重放消息，orderId={}",
                     message.getOrderId());
@@ -359,12 +322,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         try {
+            // 事务模板保证数据库扣库存与订单插入同成同败。
             Boolean created = transactionTemplate.execute(status -> {
-                boolean stockUpdated = seckillVoucherService.update()
-                        .setSql("stock = stock - 1")
-                        .eq("voucher_id", message.getVoucherId())
-                        .gt("stock", 0)
-                        .update();
+                boolean stockUpdated = seckillVoucherService.decreaseStock(message.getVoucherId());
                 if (!stockUpdated) {
                     throw new IllegalStateException(
                             "数据库秒杀库存不足，voucherId=" + message.getVoucherId());
@@ -406,6 +366,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    /**
+     * 死信消费者入口。与正常消费者共用 orderId 锁，防止建单和回补同时发生。
+     */
     @Override
     public void handleDeadLetter(SeckillVoucherMqDTO message) {
         validateMessage(message);
@@ -415,6 +378,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 () -> doHandleDeadLetter(message));
     }
 
+    /**
+     * 先以数据库为准：有订单则修复 SUCCESS；确定无订单、无同用户同券冲突后，
+     * 才允许 Lua 原子回补 Redis 库存和用户资格。
+     */
     private void doHandleDeadLetter(SeckillVoucherMqDTO message) {
         VoucherOrder existingOrder = getById(message.getOrderId());
         if (existingOrder != null) {
@@ -428,6 +395,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
 
+        // 已有另一订单号时不能释放用户资格，否则可能让同一用户再次抢购。
         VoucherOrder sameBusinessOrder = query()
                 .eq("user_id", message.getUserId())
                 .eq("voucher_id", message.getVoucherId())
@@ -438,6 +406,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                             + message.getOrderId() + "，existingOrderId=" + sameBusinessOrder.getId());
         }
 
+        // Lua 会核对 PROCESSING 状态和 userId -> orderId 映射，保证重复死信只回补一次。
         Long result = stringRedisTemplate.execute(
                 ORDER_COMPENSATE_SCRIPT,
                 Arrays.asList(
@@ -500,6 +469,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    /**
+     * 超时扫描只按数据库事实修复已存在订单的 SUCCESS。
+     * 查不到数据库订单时继续等待 MQ/DLQ，不在这里猜测失败并回补库存。
+     */
     @Override
     public void reconcileProcessingOrder(Long orderId) {
         String resultKey = SeckillRedisKeys.orderResultKey(orderId);
@@ -544,6 +517,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         log.warn("扫描发现数据库订单已存在，已修复 Redis SUCCESS，orderId={}", orderId);
     }
 
+    /** 拒绝缺少订单号、用户号或券号的消息，交由 MQ 重试或进入死信处理。 */
     private void validateMessage(SeckillVoucherMqDTO message) {
         if (message == null
                 || message.getOrderId() == null
@@ -553,6 +527,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    /** 同一 orderId 只有业务字段也一致时，才视为安全的重复投递。 */
     private boolean isSameOrder(VoucherOrder voucherOrder, SeckillVoucherMqDTO message) {
         return message.getUserId().equals(voucherOrder.getUserId())
                 && message.getVoucherId().equals(voucherOrder.getVoucherId());
@@ -585,6 +560,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         log.info("秒杀订单处理状态更新为 SUCCESS，orderId={}", orderId);
     }
 
+    /** 读取 Redis 订单终态；非法状态抛异常，避免把未知状态当新订单处理。 */
     private SeckillOrderStatus getStoredOrderStatus(Long orderId) {
         Object value = stringRedisTemplate.opsForHash().get(
                 SeckillRedisKeys.orderResultKey(orderId), "status");
@@ -599,6 +575,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         return status;
     }
 
+    /** 统一组装状态查询接口的返回数据。 */
     private SeckillOrderStatusDTO buildOrderStatus(
             Long orderId, Long voucherId, SeckillOrderStatus status) {
         return SeckillOrderStatusDTO.builder()
@@ -608,6 +585,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .build();
     }
 
+    /** Redis 字段缺失或格式错误时返回 null，由各业务分支决定如何处理。 */
     private Long parseLong(Object value) {
         if (value == null) {
             return null;
@@ -619,6 +597,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    /** Redis 状态不是已定义枚举值时返回 null，避免误认成成功。 */
     private SeckillOrderStatus parseOrderStatus(Object value) {
         if (value == null) {
             return null;
