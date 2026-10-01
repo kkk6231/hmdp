@@ -8,6 +8,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
+import com.hmdp.constant.AuthRedisKeys;
+import com.hmdp.constant.UserRedisKeys;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
@@ -26,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.hmdp.constant.RedisConstants.*;
 import static com.hmdp.constant.SystemConstants.USER_NICK_NAME_PREFIX;
 
 /**
@@ -55,7 +56,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String code = RandomUtil.randomNumbers(6);
 
         // 4.保存验证码到 Redis
-        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set(
+                AuthRedisKeys.code(phone), code,
+                AuthRedisKeys.CODE_TTL_MINUTES, TimeUnit.MINUTES);
 
         // 5.发送验证码
         log.debug("发送短信验证码成功，验证码：{}", code);
@@ -72,7 +75,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             return Result.fail("手机号格式错误！");
         }
         // 3.从redis获取验证码并校验
-        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + phone);
+        String cacheCode = stringRedisTemplate.opsForValue().get(AuthRedisKeys.code(phone));
         String code = loginForm.getCode();
         if (cacheCode == null || !cacheCode.equals(code)) {
             // 不一致，报错
@@ -98,10 +101,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                         .setIgnoreNullValue(true)
                         .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
         // 7.3.存储
-        String tokenKey = LOGIN_USER_KEY + token;
+        String tokenKey = AuthRedisKeys.login(token);
         stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
         // 7.4.设置token有效期
-        stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
+        stringRedisTemplate.expire(
+                tokenKey, AuthRedisKeys.LOGIN_TTL_MINUTES, TimeUnit.MINUTES);
 
         // 8.返回token
         return Result.ok(token);
@@ -114,8 +118,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 2.获取日期
         LocalDateTime now = LocalDateTime.now();
         // 3.拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
+        String yearMonth = now.format(DateTimeFormatter.ofPattern("yyyyMM"));
+        String key = UserRedisKeys.sign(userId, yearMonth);
         // 4.获取今天是本月的第几天
         int dayOfMonth = now.getDayOfMonth();
         // 5.写入Redis SETBIT key offset 1
@@ -130,11 +134,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 2.获取日期
         LocalDateTime now = LocalDateTime.now();
         // 3.拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
+        String yearMonth = now.format(DateTimeFormatter.ofPattern("yyyyMM"));
+        String key = UserRedisKeys.sign(userId, yearMonth);
         // 4.获取今天是本月的第几天
         int dayOfMonth = now.getDayOfMonth();
-        // 5.获取本月截止今天为止的所有的签到记录，返回的是一个十进制的数字 BITFIELD sign:5:202203 GET u14 0
+        // 5.获取本月截止今天为止的签到记录，例如 BITFIELD user:user:5:sign:202203 GET u14 0
         List<Long> result = stringRedisTemplate.opsForValue().bitField(
                 key,
                 BitFieldSubCommands.create()

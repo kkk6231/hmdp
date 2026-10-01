@@ -148,14 +148,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             // 已取得明确的业务拒绝码时可直接返回；其余情况保留未知语义供重试。
             if (context.getLuaResult() != null
                     && context.getLuaResult() != SeckillLuaResultCode.SUCCESS) {
-                return resolveSeckillResult(
-                        orderId, userId, voucherId, context.getLuaResult());
+                return resolveSeckillResult(orderId, userId, voucherId, context.getLuaResult());
             }
             return buildUnknownSeckillResult(orderId);
         }
 
-        return resolveSeckillResult(
-                orderId, userId, voucherId, context.getLuaResult());
+        return resolveSeckillResult(orderId, userId, voucherId, context.getLuaResult());
     }
 
     /**
@@ -222,7 +220,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     /**
-     * 查询当前用户的异步订单结果。优先读取 Redis；结果不存在或 Redis 异常时，
+     * 查询当前用户的异步订单状态。优先读取 Redis；状态记录不存在或 Redis 异常时，
      * 再用数据库中的已落地订单兜底，并尝试回填 SUCCESS。
      */
     @Override
@@ -232,19 +230,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         Long currentUserId = UserHolder.getUser().getId();
-        String resultKey = SeckillRedisKeys.orderResultKey(orderId);
+        String stateKey = SeckillRedisKeys.orderStateKey(orderId);
         boolean redisAvailable = true;
         try {
-            Map<Object, Object> result = stringRedisTemplate.opsForHash().entries(resultKey);
-            if (!result.isEmpty()) {
-                // 状态结果携带用户 ID，不能只凭订单号向其他用户泄露处理状态。
-                Long resultUserId = parseLong(result.get("userId"));
+            Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(stateKey);
+            if (!state.isEmpty()) {
+                // 状态记录携带用户 ID，不能只凭订单号向其他用户泄露处理状态。
+                Long resultUserId = parseLong(state.get("userId"));
                 if (resultUserId == null || !currentUserId.equals(resultUserId)) {
                     return Result.fail(SeckillResultMessages.ORDER_ACCESS_DENIED);
                 }
 
-                SeckillOrderStatus status = parseOrderStatus(result.get("status"));
-                Long voucherId = parseLong(result.get("voucherId"));
+                SeckillOrderStatus status = parseOrderStatus(state.get("status"));
+                Long voucherId = parseLong(state.get("voucherId"));
                 if (status != null) {
                     return Result.ok(buildOrderStatus(orderId, voucherId, status));
                 }
@@ -411,10 +409,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 ORDER_COMPENSATE_SCRIPT,
                 Arrays.asList(
                         SeckillRedisKeys.stockKey(message.getVoucherId()),
-                        SeckillRedisKeys.userOrderKey(message.getVoucherId()),
-                        SeckillRedisKeys.orderResultKey(message.getOrderId()),
+                        SeckillRedisKeys.userOrderKey(
+                                message.getVoucherId(), message.getUserId()),
+                        SeckillRedisKeys.orderStateKey(message.getOrderId()),
                         SeckillRedisKeys.ORDER_PENDING_KEY),
-                String.valueOf(message.getUserId()),
                 String.valueOf(message.getOrderId()),
                 String.valueOf(SeckillRedisKeys.ORDER_FAILED_TTL_SECONDS),
                 "DLQ_RETRIES_EXHAUSTED",
@@ -475,17 +473,17 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      */
     @Override
     public void reconcileProcessingOrder(Long orderId) {
-        String resultKey = SeckillRedisKeys.orderResultKey(orderId);
-        Map<Object, Object> result = stringRedisTemplate.opsForHash().entries(resultKey);
-        if (result.isEmpty()) {
+        String stateKey = SeckillRedisKeys.orderStateKey(orderId);
+        Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(stateKey);
+        if (state.isEmpty()) {
             log.error("pending 中的订单缺少结果状态，保留待人工核对，orderId={}", orderId);
             return;
         }
 
-        SeckillOrderStatus status = parseOrderStatus(result.get("status"));
+        SeckillOrderStatus status = parseOrderStatus(state.get("status"));
         if (status == null) {
             log.error("pending 中的订单状态非法，保留待人工核对，orderId={}，status={}",
-                    orderId, result.get("status"));
+                    orderId, state.get("status"));
             return;
         }
         if (status == SeckillOrderStatus.SUCCESS || status == SeckillOrderStatus.FAILED) {
@@ -494,8 +492,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
 
-        Long userId = parseLong(result.get("userId"));
-        Long voucherId = parseLong(result.get("voucherId"));
+        Long userId = parseLong(state.get("userId"));
+        Long voucherId = parseLong(state.get("voucherId"));
         if (userId == null || voucherId == null) {
             log.error("PROCESSING 订单缺少业务字段，保留待人工核对，orderId={}", orderId);
             return;
@@ -538,10 +536,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * RocketMQ 重投后通过订单幂等检查再次补写 SUCCESS。
      */
     private void markOrderSuccess(Long orderId, Long userId, Long voucherId) {
-        String resultKey = SeckillRedisKeys.orderResultKey(orderId);
+        String stateKey = SeckillRedisKeys.orderStateKey(orderId);
         Long result = stringRedisTemplate.execute(
                 ORDER_SUCCESS_SCRIPT,
-                Arrays.asList(resultKey, SeckillRedisKeys.ORDER_PENDING_KEY),
+                Arrays.asList(stateKey, SeckillRedisKeys.ORDER_PENDING_KEY),
                 String.valueOf(orderId), String.valueOf(userId), String.valueOf(voucherId),
                 String.valueOf(SeckillRedisKeys.ORDER_SUCCESS_TTL_SECONDS),
                 String.valueOf(System.currentTimeMillis()));
@@ -563,7 +561,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     /** 读取 Redis 订单终态；非法状态抛异常，避免把未知状态当新订单处理。 */
     private SeckillOrderStatus getStoredOrderStatus(Long orderId) {
         Object value = stringRedisTemplate.opsForHash().get(
-                SeckillRedisKeys.orderResultKey(orderId), "status");
+                SeckillRedisKeys.orderStateKey(orderId), "status");
         if (value == null) {
             return null;
         }

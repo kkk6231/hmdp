@@ -1,5 +1,6 @@
 package com.hmdp.utils;
 
+import com.hmdp.constant.IdRedisKeys;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -32,9 +33,10 @@ public class RedisIdWorker {
 
         // 2.生成序列号
         // 2.1.获取当前日期，精确到天
-        String date = now.format(DateTimeFormatter.ofPattern("yyyy:MM:dd"));
+        String date = now.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         // 2.2.自增长
-        long count = stringRedisTemplate.opsForValue().increment("icr:" + keyPrefix + ":" + date);
+        long count = stringRedisTemplate.opsForValue().increment(
+                IdRedisKeys.sequence(keyPrefix, date));
 
         // 3.拼接并返回
         return timestamp << COUNT_BITS | count;

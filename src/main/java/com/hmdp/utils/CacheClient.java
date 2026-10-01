@@ -4,6 +4,7 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.hmdp.constant.ShopRedisKeys;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -13,9 +14,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-
-import static com.hmdp.constant.RedisConstants.CACHE_NULL_TTL;
-import static com.hmdp.constant.RedisConstants.LOCK_SHOP_KEY;
 
 @Slf4j
 @Component
@@ -43,8 +41,7 @@ public class CacheClient {
     }
 
     public <R,ID> R queryWithPassThrough(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit){
-        String key = keyPrefix + id;
+            String key, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit){
         // 1.从redis查询商铺缓存
         String json = stringRedisTemplate.opsForValue().get(key);
         // 2.判断是否存在
@@ -63,7 +60,8 @@ public class CacheClient {
         // 5.不存在，返回错误
         if (r == null) {
             // 将空值写入redis
-            stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set(
+                    key, "", ShopRedisKeys.NULL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
             // 返回错误信息
             return null;
         }
@@ -73,8 +71,7 @@ public class CacheClient {
     }
 
     public <R, ID> R queryWithLogicalExpire(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
-        String key = keyPrefix + id;
+            String key, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         // 1.从redis查询商铺缓存
         String json = stringRedisTemplate.opsForValue().get(key);
         // 2.判断是否存在
@@ -94,7 +91,7 @@ public class CacheClient {
         // 5.2.已过期，需要缓存重建
         // 6.缓存重建
         // 6.1.获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
+        String lockKey = ShopRedisKeys.cacheLock(id);
         boolean isLock = tryLock(lockKey);
         // 6.2.判断是否获取锁成功
         if (isLock){
@@ -118,8 +115,7 @@ public class CacheClient {
     }
 
     public <R, ID> R queryWithMutex(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
-        String key = keyPrefix + id;
+            String key, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         // 1.从redis查询商铺缓存
         String shopJson = stringRedisTemplate.opsForValue().get(key);
         // 2.判断是否存在
@@ -135,7 +131,7 @@ public class CacheClient {
 
         // 4.实现缓存重建
         // 4.1.获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
+        String lockKey = ShopRedisKeys.cacheLock(id);
         R r = null;
         try {
             boolean isLock = tryLock(lockKey);
@@ -143,14 +139,15 @@ public class CacheClient {
             if (!isLock) {
                 // 4.3.获取锁失败，休眠并重试
                 Thread.sleep(50);
-                return queryWithMutex(keyPrefix, id, type, dbFallback, time, unit);
+                return queryWithMutex(key, id, type, dbFallback, time, unit);
             }
             // 4.4.获取锁成功，根据id查询数据库
             r = dbFallback.apply(id);
             // 5.不存在，返回错误
             if (r == null) {
                 // 将空值写入redis
-                stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+                stringRedisTemplate.opsForValue().set(
+                        key, "", ShopRedisKeys.NULL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
                 // 返回错误信息
                 return null;
             }
@@ -167,7 +164,8 @@ public class CacheClient {
     }
 
     private boolean tryLock(String key) {
-        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(
+                key, "1", ShopRedisKeys.CACHE_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         return BooleanUtil.isTrue(flag);
     }
 

@@ -64,7 +64,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
         try {
             // 活动元数据缺失表示尚未预热，不能让请求继续进入 MQ 链路。
             Map<Object, Object> activityMeta = stringRedisTemplate.opsForHash().entries(
-                    SeckillRedisKeys.voucherMetaKey(voucherId));
+                    SeckillRedisKeys.voucherTimeKey(voucherId));
             if (activityMeta.isEmpty()) {
                 return Result.fail(SeckillResultMessages.ACTIVITY_NOT_READY);
             }
@@ -100,9 +100,8 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
      */
     @Override
     public String findExistingOrderIdValue(Long userId, Long voucherId) {
-        Object value = stringRedisTemplate.opsForHash().get(
-                SeckillRedisKeys.userOrderKey(voucherId), String.valueOf(userId));
-        return value == null ? null : value.toString();
+        return stringRedisTemplate.opsForValue().get(
+                SeckillRedisKeys.userOrderKey(voucherId, userId));
     }
 
     /**
@@ -115,11 +114,11 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
                 SECKILL_SCRIPT,
                 Arrays.asList(
                         SeckillRedisKeys.stockKey(voucherId),
-                        SeckillRedisKeys.userOrderKey(voucherId),
+                        SeckillRedisKeys.userOrderKey(voucherId, userId),
                         SeckillRedisKeys.transactionKey(orderId),
-                        SeckillRedisKeys.orderResultKey(orderId),
+                        SeckillRedisKeys.orderStateKey(orderId),
                         ORDER_PENDING_KEY,
-                        SeckillRedisKeys.voucherMetaKey(voucherId)),
+                        SeckillRedisKeys.voucherTimeKey(voucherId)),
                 String.valueOf(userId), String.valueOf(orderId), String.valueOf(voucherId),
                 String.valueOf(MQ_TRANSACTION_TTL_SECONDS),
                 String.valueOf(System.currentTimeMillis()));
@@ -130,7 +129,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
     public void ensureOrderProcessing(Long orderId, Long userId, Long voucherId) {
         stringRedisTemplate.execute(
                 ORDER_PROCESSING_SCRIPT,
-                Arrays.asList(SeckillRedisKeys.orderResultKey(orderId), ORDER_PENDING_KEY),
+                Arrays.asList(SeckillRedisKeys.orderStateKey(orderId), ORDER_PENDING_KEY),
                 String.valueOf(orderId), String.valueOf(userId), String.valueOf(voucherId),
                 String.valueOf(System.currentTimeMillis()));
     }
@@ -156,7 +155,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
     public void preheatSeckillVoucher(SeckillVoucher voucher) {
         Long voucherId = voucher.getVoucherId();
         String stockKey = SeckillRedisKeys.stockKey(voucherId);
-        String metaKey = SeckillRedisKeys.voucherMetaKey(voucherId);
+        String timeKey = SeckillRedisKeys.voucherTimeKey(voucherId);
         stringRedisTemplate.opsForValue().set(stockKey, voucher.getStock().toString());
 
         Map<String, String> activityMeta = new HashMap<>();
@@ -168,7 +167,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
                 SeckillRedisKeys.VOUCHER_END_TIME_FIELD,
                 String.valueOf(voucher.getEndTime()
                         .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()));
-        stringRedisTemplate.opsForHash().putAll(metaKey, activityMeta);
+        stringRedisTemplate.opsForHash().putAll(timeKey, activityMeta);
 
         // 库存和元数据一起过期，避免资格脚本只读到其中一部分。
         Date expireAt = Date.from(voucher.getEndTime()
@@ -176,7 +175,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
                 .atZone(ZoneId.systemDefault())
                 .toInstant());
         stringRedisTemplate.expireAt(stockKey, expireAt);
-        stringRedisTemplate.expireAt(metaKey, expireAt);
+        stringRedisTemplate.expireAt(timeKey, expireAt);
     }
 
     /** Redis 元数据格式异常时返回 null，由调用方给出活动信息异常提示。 */

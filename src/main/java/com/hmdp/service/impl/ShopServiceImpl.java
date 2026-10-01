@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.constant.ShopRedisKeys;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
@@ -21,8 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
 import javax.annotation.Resource;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-
-import static com.hmdp.constant.RedisConstants.*;
 
 /**
  * <p>
@@ -46,7 +45,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     public Result queryById(Long id) {
         // 解决缓存穿透
         Shop shop = cacheClient
-                .queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+                .queryWithPassThrough(
+                        ShopRedisKeys.cache(id), id, Shop.class, this::getById,
+                        ShopRedisKeys.CACHE_TTL_MINUTES, TimeUnit.MINUTES);
 
         if (shop == null) {
             return Result.fail("店铺不存在！");
@@ -65,7 +66,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         // 1.更新数据库
         updateById(shop);
         // 2.删除缓存
-        stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
+        stringRedisTemplate.delete(ShopRedisKeys.cache(id));
         return Result.ok();
     }
 
@@ -86,7 +87,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
 
         // 3.查询redis、按照距离排序、分页。结果：shopId、distance
-        String key = SHOP_GEO_KEY + typeId;
+        String key = ShopRedisKeys.geo(typeId);
         GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo() // GEOSEARCH key BYLONLAT x y BYRADIUS 10 WITHDISTANCE
                 .search(
                         key,

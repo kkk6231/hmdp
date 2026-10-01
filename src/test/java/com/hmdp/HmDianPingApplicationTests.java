@@ -1,6 +1,7 @@
 package com.hmdp;
 
 import com.hmdp.entity.Shop;
+import com.hmdp.constant.ShopRedisKeys;
 import com.hmdp.service.impl.ShopServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,8 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-
-import static com.hmdp.constant.RedisConstants.SHOP_GEO_KEY;
 
 @SpringBootTest
 class HmDianPingApplicationTests {
@@ -35,7 +34,7 @@ class HmDianPingApplicationTests {
         for (Map.Entry<Long, List<Shop>> entry : map.entrySet()) {
             // 3.1.获取类型id
             Long typeId = entry.getKey();
-            String key = SHOP_GEO_KEY + typeId;
+            String key = ShopRedisKeys.geo(typeId.intValue());
             // 3.2.获取同类型店铺的集合
             List<Shop> value = entry.getValue();
             List<RedisGeoCommands.GeoLocation<String>> locations = new ArrayList<>(value.size());

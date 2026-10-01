@@ -2,9 +2,9 @@
 local stockKey = KEYS[1]
 local userOrderKey = KEYS[2]
 local transactionKey = KEYS[3]
-local orderResultKey = KEYS[4]
+local orderStateKey = KEYS[4]
 local pendingKey = KEYS[5]
-local activityMetaKey = KEYS[6]
+local activityTimeKey = KEYS[6]
 
 -- 2. 参数列表
 local userId = ARGV[1]
@@ -13,20 +13,21 @@ local voucherId = ARGV[3]
 local transactionTtlSeconds = tonumber(ARGV[4])
 local processingTimestamp = tonumber(ARGV[5])
 
+-- 用来保证订单状态幂等性：MQ 事务回查、消息重试可能让脚本被重复执行
 -- 订单已经 SUCCESS/FAILED 时不能被重复执行的 Lua 降级回 PROCESSING
-local function ensureProcessingResult()
-    local currentStatus = redis.call('hget', orderResultKey, 'status')
+local function ensureProcessingState()
+    local currentStatus = redis.call('hget', orderStateKey, 'status')
     if currentStatus == 'SUCCESS' or currentStatus == 'FAILED' then
         return
     end
 
-    redis.call('hset', orderResultKey,
+    redis.call('hset', orderStateKey,
             'status', 'PROCESSING',
             'userId', userId,
             'voucherId', voucherId)
-    redis.call('hsetnx', orderResultKey, 'createdAt', processingTimestamp)
+    redis.call('hsetnx', orderStateKey, 'createdAt', processingTimestamp)
     -- PROCESSING 必须保留到进入终态，顺便清除旧版本可能设置的 TTL
-    redis.call('persist', orderResultKey)
+    redis.call('persist', orderStateKey)
     -- NX 保留第一次进入 PROCESSING 的时间，不因事务回查而延后超时判断
     redis.call('zadd', pendingKey, 'NX', processingTimestamp, orderId)
 end
@@ -34,7 +35,7 @@ end
 -- 3. 已经得到过明确事务结果时，重复执行直接返回原结果
 local transactionState = redis.call('get', transactionKey)
 if transactionState == 'COMMIT' then
-    ensureProcessingResult()
+    ensureProcessingState()
     return 0
 end
 if transactionState == 'ROLLBACK:OUT_OF_STOCK' then
@@ -56,8 +57,8 @@ end
 -- 4. 使用 Redis 服务器时间校验活动时间。
 -- 活动元数据与库存一起预热，但保留到活动结束后的恢复窗口，
 -- 因此不能通过库存 Key 是否存在来判断活动是否仍在进行。
-local beginTimeValue = redis.call('hget', activityMetaKey, 'beginTime')
-local endTimeValue = redis.call('hget', activityMetaKey, 'endTime')
+local beginTimeValue = redis.call('hget', activityTimeKey, 'beginTime')
+local endTimeValue = redis.call('hget', activityTimeKey, 'endTime')
 if not beginTimeValue or not endTimeValue then
     redis.call('set', transactionKey, 'ROLLBACK:NOT_READY', 'EX', transactionTtlSeconds)
     return 5
@@ -70,7 +71,7 @@ if not beginTime or not endTime or beginTime >= endTime then
     return 5
 end
 
-local redisTime = redis.call('TIME')
+local redisTime = redis.call('TIME') -- 获取 redis 服务器的时间
 local nowMillis = tonumber(redisTime[1]) * 1000
         + math.floor(tonumber(redisTime[2]) / 1000)
 if nowMillis < beginTime then
@@ -83,12 +84,12 @@ if nowMillis >= endTime then
 end
 
 -- 5. 判断用户是否已经获得该券资格
-local existingOrderId = redis.call('hget', userOrderKey, userId)
+local existingOrderId = redis.call('get', userOrderKey)
 if existingOrderId then
     if existingOrderId == orderId then
         -- 同一个 orderId 再次执行，说明此前预扣已经成功，恢复 COMMIT 状态
         redis.call('set', transactionKey, 'COMMIT', 'EX', transactionTtlSeconds)
-        ensureProcessingResult()
+        ensureProcessingState()
         return 0
     end
 
@@ -111,11 +112,11 @@ end
 
 -- 7. 原子预扣库存、保存用户订单映射并记录 MQ 本地事务结果
 redis.call('incrby', stockKey, -1)
-redis.call('hset', userOrderKey, userId, orderId)
+redis.call('set', userOrderKey, orderId)
 local stockTtl = redis.call('ttl', stockKey)
 if stockTtl > 0 then
     redis.call('expire', userOrderKey, stockTtl)
 end
 redis.call('set', transactionKey, 'COMMIT', 'EX', transactionTtlSeconds)
-ensureProcessingResult()
+ensureProcessingState()
 return 0

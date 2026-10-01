@@ -21,8 +21,8 @@ import static org.mockito.Mockito.when;
 
 class RedisRateLimitServiceImplTest {
 
-    private static final String USER_KEY = "seckill:rate:user:10:7";
-    private static final String VOUCHER_KEY = "seckill:rate:voucher:10";
+    private static final String USER_KEY = "seckill:voucher:10:user:7:rate";
+    private static final String VOUCHER_KEY = "seckill:voucher:10:rate";
     private static final List<String> KEYS = Arrays.asList(USER_KEY, VOUCHER_KEY);
 
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);

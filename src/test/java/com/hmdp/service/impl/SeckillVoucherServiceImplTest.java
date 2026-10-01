@@ -49,14 +49,14 @@ class SeckillVoucherServiceImplTest {
         Map<Object, Object> meta = new HashMap<>();
         meta.put(SeckillRedisKeys.VOUCHER_BEGIN_TIME_FIELD, String.valueOf(now - 60_000));
         meta.put(SeckillRedisKeys.VOUCHER_END_TIME_FIELD, String.valueOf(now + 60_000));
-        when(hashOperations.entries(SeckillRedisKeys.voucherMetaKey(10L))).thenReturn(meta);
+        when(hashOperations.entries(SeckillRedisKeys.voucherTimeKey(10L))).thenReturn(meta);
 
         assertNull(service.validateActivityTime(10L));
     }
 
     @Test
     void rejectsActivityWhenPreheatDataIsMissing() {
-        when(hashOperations.entries(SeckillRedisKeys.voucherMetaKey(10L)))
+        when(hashOperations.entries(SeckillRedisKeys.voucherTimeKey(10L)))
                 .thenReturn(new HashMap<>());
 
         Result result = service.validateActivityTime(10L);
@@ -65,16 +65,25 @@ class SeckillVoucherServiceImplTest {
     }
 
     @Test
+    void readsExistingOrderFromPerUserStringKey() {
+        String key = SeckillRedisKeys.userOrderKey(10L, 7L);
+        when(valueOperations.get(key)).thenReturn("11");
+
+        assertEquals("11", service.findExistingOrderIdValue(7L, 10L));
+        verify(valueOperations).get(key);
+    }
+
+    @Test
     void passesQualificationKeysInLuaContractOrder() {
         when(redisTemplate.execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
                         SeckillRedisKeys.stockKey(10L),
-                        SeckillRedisKeys.userOrderKey(10L),
+                        SeckillRedisKeys.userOrderKey(10L, 7L),
                         SeckillRedisKeys.transactionKey(11L),
-                        SeckillRedisKeys.orderResultKey(11L),
+                        SeckillRedisKeys.orderStateKey(11L),
                         SeckillRedisKeys.ORDER_PENDING_KEY,
-                        SeckillRedisKeys.voucherMetaKey(10L))),
+                        SeckillRedisKeys.voucherTimeKey(10L))),
                 eq("7"), eq("11"), eq("10"),
                 eq(String.valueOf(SeckillRedisKeys.MQ_TRANSACTION_TTL_SECONDS)),
                 any(String.class)))
@@ -96,17 +105,17 @@ class SeckillVoucherServiceImplTest {
         service.preheatSeckillVoucher(voucher);
 
         String stockKey = SeckillRedisKeys.stockKey(10L);
-        String metaKey = SeckillRedisKeys.voucherMetaKey(10L);
+        String timeKey = SeckillRedisKeys.voucherTimeKey(10L);
         verify(valueOperations).set(stockKey, "5");
         Map<String, String> meta = new HashMap<>();
         meta.put(SeckillRedisKeys.VOUCHER_BEGIN_TIME_FIELD,
                 String.valueOf(beginTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()));
         meta.put(SeckillRedisKeys.VOUCHER_END_TIME_FIELD,
                 String.valueOf(endTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()));
-        verify(hashOperations).putAll(metaKey, meta);
+        verify(hashOperations).putAll(timeKey, meta);
         Date expireAt = Date.from(endTime.plusSeconds(SeckillRedisKeys.VOUCHER_KEY_GRACE_SECONDS)
                 .atZone(ZoneId.systemDefault()).toInstant());
         verify(redisTemplate).expireAt(stockKey, expireAt);
-        verify(redisTemplate).expireAt(metaKey, expireAt);
+        verify(redisTemplate).expireAt(timeKey, expireAt);
     }
 }

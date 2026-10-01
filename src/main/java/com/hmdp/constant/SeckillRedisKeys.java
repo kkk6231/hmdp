@@ -5,16 +5,6 @@ package com.hmdp.constant;
  */
 public final class SeckillRedisKeys {
 
-    private static final String VOUCHER_PREFIX = "seckill:voucher:";
-    private static final String STOCK_SUFFIX = ":stock";
-    private static final String META_SUFFIX = ":meta";
-    private static final String USER_ORDER_SUFFIX = ":user-order";
-    private static final String MQ_TRANSACTION_PREFIX = "seckill:mq:tx:";
-    private static final String ORDER_RESULT_PREFIX = "seckill:order:result:";
-    private static final String ORDER_LOCK_PREFIX = "lock:seckill:order:";
-    private static final String RATE_LIMIT_USER_PREFIX = "seckill:rate:user:";
-    private static final String RATE_LIMIT_VOUCHER_PREFIX = "seckill:rate:voucher:";
-
     public static final String ORDER_PENDING_KEY = "seckill:order:pending";
     public static final String VOUCHER_BEGIN_TIME_FIELD = "beginTime";
     public static final String VOUCHER_END_TIME_FIELD = "endTime";
@@ -28,40 +18,40 @@ public final class SeckillRedisKeys {
     }
 
     public static String stockKey(Long voucherId) {
-        return VOUCHER_PREFIX + voucherId + STOCK_SUFFIX;
+        return "seckill:voucher:" + voucherId + ":stock";
     }
 
-    public static String voucherMetaKey(Long voucherId) {
-        return VOUCHER_PREFIX + voucherId + META_SUFFIX;
+    public static String voucherTimeKey(Long voucherId) {
+        return "seckill:voucher:" + voucherId + ":time";
     }
 
-    public static String userOrderKey(Long voucherId) {
-        return VOUCHER_PREFIX + voucherId + USER_ORDER_SUFFIX;
+    public static String userOrderKey(Long voucherId, Long userId) {
+        return "seckill:voucher:" + voucherId + ":user:" + userId + ":order";
     }
 
     public static String transactionKey(Long orderId) {
-        return MQ_TRANSACTION_PREFIX + orderId;
+        return "seckill:order:" + orderId + ":mq-transaction-status";
     }
 
-    public static String orderResultKey(Long orderId) {
-        return ORDER_RESULT_PREFIX + orderId;
+    public static String orderStateKey(Long orderId) {
+        return "seckill:order:" + orderId + ":state";
     }
 
     public static String orderLockKey(Long orderId) {
-        return ORDER_LOCK_PREFIX + orderId;
+        return "seckill:order:" + orderId + ":lock";
     }
 
     /**
      * 同一用户对同一优惠券的秒杀请求限流 Key。
      */
     public static String rateLimitUserKey(Long voucherId, Long userId) {
-        return RATE_LIMIT_USER_PREFIX + voucherId + ":" + userId;
+        return "seckill:voucher:" + voucherId + ":user:" + userId + ":rate";
     }
 
     /**
      * 同一优惠券进入秒杀核心链路的全局限流 Key。
      */
     public static String rateLimitVoucherKey(Long voucherId) {
-        return RATE_LIMIT_VOUCHER_PREFIX + voucherId;
+        return "seckill:voucher:" + voucherId + ":rate";
     }
 }
