@@ -10,17 +10,14 @@ import com.baomidou.mybatisplus.extension.service.IService;
  */
 public interface ISeckillVoucherService extends IService<SeckillVoucher> {
 
-    /**
-     * 在发送事务消息前快速检查活动时间，减少无效 Half Message。
-     * 校验通过返回 null；最终准入仍由 Lua 使用 Redis 时间判断。
-     */
+    /** 发送事务消息前快速检查活动时间，校验通过时返回 null。 */
     Result validateActivityTime(Long voucherId);
 
     /** 返回 Redis 中的原始订单号，供重复请求和事务回查分别判断。 */
     String findExistingOrderIdValue(Long userId, Long voucherId);
 
     /** 原子校验时间、一人一单和库存，并保存事务状态与 PROCESSING 结果。 */
-    Long reserveQualification(Long orderId, Long userId, Long voucherId);
+    Long reserveSeckillOrder(Long orderId, Long userId, Long voucherId);
 
     /** Broker 回查确认已预留资格时，补齐可能缺失的 PROCESSING 状态。 */
     void ensureOrderProcessing(Long orderId, Long userId, Long voucherId);

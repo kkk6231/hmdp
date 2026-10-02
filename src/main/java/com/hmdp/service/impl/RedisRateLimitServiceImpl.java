@@ -12,9 +12,7 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 import java.util.Arrays;
 
-/**
- * 基于 Redis Lua 固定窗口算法的限流实现。
- */
+/** 基于 Redis Lua 固定窗口算法的限流实现。 */
 @Service
 public class RedisRateLimitServiceImpl implements IRateLimitService {
 

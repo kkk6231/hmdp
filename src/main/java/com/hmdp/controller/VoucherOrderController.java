@@ -13,13 +13,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
 
-/**
- * <p>
- *  前端控制器
- * </p>
- *
- * @author 虎哥
- */
 @RestController
 @RequestMapping("/voucher-order")
 public class VoucherOrderController {
@@ -27,11 +20,7 @@ public class VoucherOrderController {
     @Resource
     private IVoucherOrderService voucherOrderService;
 
-    /**
-     * 优惠券秒杀
-     * @param voucherId
-     * @return
-     */
+    /** 发起优惠券秒杀。 */
     @PostMapping("seckill/{id}")
     @SeckillRateLimit(
             userMaxCount = 5,
@@ -43,9 +32,7 @@ public class VoucherOrderController {
         return voucherOrderService.seckillVoucher(voucherId);
     }
 
-    /**
-     * 查询秒杀订单的异步处理状态。
-     */
+    /** 查询秒杀订单的异步处理状态。 */
     @GetMapping("status/{orderId}")
     public Result querySeckillOrderStatus(@PathVariable Long orderId) {
         return voucherOrderService.querySeckillOrderStatus(orderId);

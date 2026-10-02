@@ -26,16 +26,11 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     /** 根据店铺查询可展示的优惠券列表。 */
     @Override
     public Result queryVoucherOfShop(Long shopId) {
-        // 查询优惠券信息
         List<Voucher> vouchers = getBaseMapper().queryVoucherOfShop(shopId);
-        // 返回结果
         return Result.ok(vouchers);
     }
 
-    /**
-     * 新增秒杀券：先保存基础券取得 ID，再保存关联的秒杀券记录，最后预热 Redis。
-     * 两次数据库写入处于同一事务；当前 Redis 预热发生在该事务提交之前。
-     */
+    /** 保存基础券和秒杀信息，并预热 Redis。 */
     @Override
     @Transactional
     public void addSeckillVoucher(Voucher voucher) {
@@ -45,9 +40,7 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         if (!voucher.getBeginTime().isBefore(voucher.getEndTime())) {
             throw new IllegalArgumentException("秒杀活动开始时间必须早于结束时间");
         }
-        // 保存优惠券
         save(voucher);
-        // 保存秒杀信息
         SeckillVoucher seckillVoucher = new SeckillVoucher();
         seckillVoucher.setVoucherId(voucher.getId());
         seckillVoucher.setStock(voucher.getStock());

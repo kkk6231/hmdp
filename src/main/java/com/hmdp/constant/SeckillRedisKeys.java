@@ -5,7 +5,6 @@ package com.hmdp.constant;
  */
 public final class SeckillRedisKeys {
 
-    public static final String ORDER_PENDING_KEY = "seckill:order:pending";
     public static final String VOUCHER_BEGIN_TIME_FIELD = "beginTime";
     public static final String VOUCHER_END_TIME_FIELD = "endTime";
 
@@ -41,16 +40,12 @@ public final class SeckillRedisKeys {
         return "seckill:order:" + orderId + ":lock";
     }
 
-    /**
-     * 同一用户对同一优惠券的秒杀请求限流 Key。
-     */
+    /** 同一用户对同一优惠券的秒杀请求限流 Key。 */
     public static String rateLimitUserKey(Long voucherId, Long userId) {
         return "seckill:voucher:" + voucherId + ":user:" + userId + ":rate";
     }
 
-    /**
-     * 同一优惠券进入秒杀核心链路的全局限流 Key。
-     */
+    /** 同一优惠券进入秒杀核心链路的全局限流 Key。 */
     public static String rateLimitVoucherKey(Long voucherId) {
         return "seckill:voucher:" + voucherId + ":rate";
     }

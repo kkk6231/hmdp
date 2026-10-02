@@ -5,11 +5,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/**
- * 秒杀接口限流注解。
- *
- * <p>用户和 voucher 两个维度拥有独立的阈值与统计窗口。</p>
- */
+/** 秒杀接口限流规则，分别配置用户和优惠券维度的阈值与窗口。 */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface SeckillRateLimit {

@@ -28,11 +28,7 @@ rocketmq:
 
 hmdp:
   mq:
-    dlq-consumer-enabled: false # 是否启用死信补偿消费者
-    processing-scan-enabled: false # 是否启用 PROCESSING 超时扫描
-    processing-timeout-seconds: 300 # 超过 5 分钟仍未完成则进入核对
-    processing-scan-interval-ms: 60000 # 每分钟扫描一次
-    processing-scan-batch-size: 100 # 单次最多核对 100 个订单
+    dlq-consumer-enabled: true # 是否启用死信补偿消费者
     order-lock-wait-millis: 200 # 同一 orderId 锁的最长等待时间，失败后交给 RocketMQ 重试
 
 mybatis-plus:

@@ -41,10 +41,7 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
     @Resource
     private ISeckillVoucherService seckillVoucherService;
 
-    /**
-     * Half Message 写入 Broker 后执行 Redis 资格预留。
-     * Lua 明确成功才提交；明确的业务拒绝才回滚；无法判断时交给 Broker 回查。
-     */
+    /** 预留资格并据此提交、回滚或等待 Broker 回查。 */
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message message, Object arg) {
         if (!(arg instanceof SeckillVoucherTransactionContext)) {
@@ -54,7 +51,7 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
 
         SeckillVoucherTransactionContext context = (SeckillVoucherTransactionContext) arg;
         try {
-            Long result = seckillVoucherService.reserveQualification(
+            Long result = seckillVoucherService.reserveSeckillOrder(
                     context.getOrderId(), context.getUserId(), context.getVoucherId());
             if (result == null) {
                 log.error("秒杀 Lua 未返回结果，orderId={}", context.getOrderId());
@@ -89,10 +86,7 @@ public class SeckillVoucherTransactionListener implements RocketMQLocalTransacti
         }
     }
 
-    /**
-     * Broker 收不到明确事务决议时回查 Redis。
-     * 回查不会再次预扣库存，只读取事务状态或用户资格映射。
-     */
+    /** Broker 回查时只读取事务状态和资格映射，不重复预扣库存。 */
     @Override
     public RocketMQLocalTransactionState checkLocalTransaction(Message message) {
         try {

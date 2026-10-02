@@ -37,7 +37,7 @@ class SeckillVoucherTransactionListenerTest {
     void commitsWhenQualificationIsReserved() {
         SeckillVoucherTransactionContext context =
                 new SeckillVoucherTransactionContext(11L, 7L, 10L);
-        when(seckillVoucherService.reserveQualification(11L, 7L, 10L)).thenReturn(0L);
+        when(seckillVoucherService.reserveSeckillOrder(11L, 7L, 10L)).thenReturn(0L);
 
         assertEquals(RocketMQLocalTransactionState.COMMIT,
                 listener.executeLocalTransaction(message(), context));
@@ -48,7 +48,7 @@ class SeckillVoucherTransactionListenerTest {
     void rollsBackWhenUserAlreadyHasQualification() {
         SeckillVoucherTransactionContext context =
                 new SeckillVoucherTransactionContext(11L, 7L, 10L);
-        when(seckillVoucherService.reserveQualification(11L, 7L, 10L)).thenReturn(2L);
+        when(seckillVoucherService.reserveSeckillOrder(11L, 7L, 10L)).thenReturn(2L);
 
         assertEquals(RocketMQLocalTransactionState.ROLLBACK,
                 listener.executeLocalTransaction(message(), context));

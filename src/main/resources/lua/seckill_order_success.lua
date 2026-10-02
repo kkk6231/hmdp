@@ -1,11 +1,9 @@
 local orderStateKey = KEYS[1]
-local pendingKey = KEYS[2]
 
-local orderId = ARGV[1]
-local userId = ARGV[2]
-local voucherId = ARGV[3]
-local successTtlSeconds = tonumber(ARGV[4])
-local successTimestamp = ARGV[5]
+local userId = ARGV[1]
+local voucherId = ARGV[2]
+local successTtlSeconds = tonumber(ARGV[3])
+local successTimestamp = ARGV[4]
 
 local currentStatus = redis.call('hget', orderStateKey, 'status')
 if currentStatus == 'FAILED' then
@@ -19,5 +17,4 @@ redis.call('hset', orderStateKey,
         'updatedAt', successTimestamp)
 redis.call('hdel', orderStateKey, 'failureReason', 'failedAt')
 redis.call('expire', orderStateKey, successTtlSeconds)
-redis.call('zrem', pendingKey, orderId)
 return 0

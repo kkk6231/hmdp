@@ -35,6 +35,5 @@ class RedisKeyNamingTest {
                 SeckillRedisKeys.transactionKey(11L));
         assertEquals("seckill:order:11:state", SeckillRedisKeys.orderStateKey(11L));
         assertEquals("seckill:order:11:lock", SeckillRedisKeys.orderLockKey(11L));
-        assertEquals("seckill:order:pending", SeckillRedisKeys.ORDER_PENDING_KEY);
     }
 }

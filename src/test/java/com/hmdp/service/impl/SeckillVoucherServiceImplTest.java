@@ -82,14 +82,13 @@ class SeckillVoucherServiceImplTest {
                         SeckillRedisKeys.userOrderKey(10L, 7L),
                         SeckillRedisKeys.transactionKey(11L),
                         SeckillRedisKeys.orderStateKey(11L),
-                        SeckillRedisKeys.ORDER_PENDING_KEY,
                         SeckillRedisKeys.voucherTimeKey(10L))),
                 eq("7"), eq("11"), eq("10"),
                 eq(String.valueOf(SeckillRedisKeys.MQ_TRANSACTION_TTL_SECONDS)),
                 any(String.class)))
                 .thenReturn(0L);
 
-        assertEquals(0L, service.reserveQualification(11L, 7L, 10L));
+        assertEquals(0L, service.reserveSeckillOrder(11L, 7L, 10L));
     }
 
     @Test

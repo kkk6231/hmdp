@@ -1,10 +1,8 @@
 local orderStateKey = KEYS[1]
-local pendingKey = KEYS[2]
 
-local orderId = ARGV[1]
-local userId = ARGV[2]
-local voucherId = ARGV[3]
-local processingTimestamp = tonumber(ARGV[4])
+local userId = ARGV[1]
+local voucherId = ARGV[2]
+local processingTimestamp = tonumber(ARGV[3])
 
 local currentStatus = redis.call('hget', orderStateKey, 'status')
 if currentStatus == 'SUCCESS' or currentStatus == 'FAILED' then
@@ -17,5 +15,4 @@ redis.call('hset', orderStateKey,
         'voucherId', voucherId)
 redis.call('hsetnx', orderStateKey, 'createdAt', processingTimestamp)
 redis.call('persist', orderStateKey)
-redis.call('zadd', pendingKey, 'NX', processingTimestamp, orderId)
 return 1

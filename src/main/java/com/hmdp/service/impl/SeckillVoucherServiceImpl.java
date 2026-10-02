@@ -21,7 +21,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.hmdp.constant.SeckillRedisKeys.MQ_TRANSACTION_TTL_SECONDS;
-import static com.hmdp.constant.SeckillRedisKeys.ORDER_PENDING_KEY;
 import static com.hmdp.constant.SeckillRedisKeys.VOUCHER_KEY_GRACE_SECONDS;
 
 /**
@@ -51,10 +50,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
-    /**
-     * 本地时间检查只用于快速拒绝无效请求；发送 Half Message 后，
-     * 资格 Lua 会按 Redis 服务器时间再次检查活动边界。
-     */
+    /** 快速校验活动时间；最终准入由 Lua 使用 Redis 时间判断。 */
     @Override
     public Result validateActivityTime(Long voucherId) {
         if (voucherId == null) {
@@ -94,22 +90,16 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
         }
     }
 
-    /**
-     * 保留原始字符串：订单服务会校验它是否为有效订单号；事务回查则需要
-     * 区分“映射不存在”和“映射存在但不是当前订单”。
-     */
+    /** 返回用户资格绑定的原始订单号，用于重复请求和事务回查。 */
     @Override
     public String findExistingOrderIdValue(Long userId, Long voucherId) {
         return stringRedisTemplate.opsForValue().get(
                 SeckillRedisKeys.userOrderKey(voucherId, userId));
     }
 
-    /**
-     * 获取秒杀资格的唯一写入口。KEYS 顺序必须与 seckill.lua 一致，
-     * 返回码交由事务监听器决定提交、回滚或保持 UNKNOWN。
-     */
+    /** 原子预留秒杀资格，返回码由事务监听器转换为消息事务状态。 */
     @Override
-    public Long reserveQualification(Long orderId, Long userId, Long voucherId) {
+    public Long reserveSeckillOrder(Long orderId, Long userId, Long voucherId) {
         return stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Arrays.asList(
@@ -117,7 +107,6 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
                         SeckillRedisKeys.userOrderKey(voucherId, userId),
                         SeckillRedisKeys.transactionKey(orderId),
                         SeckillRedisKeys.orderStateKey(orderId),
-                        ORDER_PENDING_KEY,
                         SeckillRedisKeys.voucherTimeKey(voucherId)),
                 String.valueOf(userId), String.valueOf(orderId), String.valueOf(voucherId),
                 String.valueOf(MQ_TRANSACTION_TTL_SECONDS),
@@ -129,15 +118,12 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
     public void ensureOrderProcessing(Long orderId, Long userId, Long voucherId) {
         stringRedisTemplate.execute(
                 ORDER_PROCESSING_SCRIPT,
-                Arrays.asList(SeckillRedisKeys.orderStateKey(orderId), ORDER_PENDING_KEY),
-                String.valueOf(orderId), String.valueOf(userId), String.valueOf(voucherId),
+                Arrays.asList(SeckillRedisKeys.orderStateKey(orderId)),
+                String.valueOf(userId), String.valueOf(voucherId),
                 String.valueOf(System.currentTimeMillis()));
     }
 
-    /**
-     * 仅当数据库库存大于零时扣减一件；返回 false 由订单服务抛异常，
-     * 使库存扣减与订单插入一起回滚。
-     */
+    /** 仅在库存充足时扣减，调用方负责将扣库存与建单放在同一事务。 */
     @Override
     public boolean decreaseStock(Long voucherId) {
         return update()
@@ -147,10 +133,7 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
                 .update();
     }
 
-    /**
-     * 预热 Redis 库存和活动时间。两个 Key 在活动结束后额外保留恢复窗口，
-     * 供已获资格但仍在消费或补偿中的订单使用。
-     */
+    /** 预热库存和活动时间，并在活动结束后保留补偿窗口。 */
     @Override
     public void preheatSeckillVoucher(SeckillVoucher voucher) {
         Long voucherId = voucher.getVoucherId();

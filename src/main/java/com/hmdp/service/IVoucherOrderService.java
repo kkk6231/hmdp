@@ -5,14 +5,6 @@ import com.hmdp.dto.SeckillVoucherMqDTO;
 import com.hmdp.entity.VoucherOrder;
 import com.baomidou.mybatisplus.extension.service.IService;
 
-/**
- * <p>
- *  服务类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
 public interface IVoucherOrderService extends IService<VoucherOrder> {
 
     Result seckillVoucher(Long voucherId);
@@ -22,6 +14,4 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
     void createVoucherOrder(SeckillVoucherMqDTO message);
 
     void handleDeadLetter(SeckillVoucherMqDTO message);
-
-    void reconcileProcessingOrder(Long orderId);
 }

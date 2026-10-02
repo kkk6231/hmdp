@@ -3,8 +3,7 @@ local stockKey = KEYS[1]
 local userOrderKey = KEYS[2]
 local transactionKey = KEYS[3]
 local orderStateKey = KEYS[4]
-local pendingKey = KEYS[5]
-local activityTimeKey = KEYS[6]
+local activityTimeKey = KEYS[5]
 
 -- 2. 参数列表
 local userId = ARGV[1]
@@ -28,8 +27,6 @@ local function ensureProcessingState()
     redis.call('hsetnx', orderStateKey, 'createdAt', processingTimestamp)
     -- PROCESSING 必须保留到进入终态，顺便清除旧版本可能设置的 TTL
     redis.call('persist', orderStateKey)
-    -- NX 保留第一次进入 PROCESSING 的时间，不因事务回查而延后超时判断
-    redis.call('zadd', pendingKey, 'NX', processingTimestamp, orderId)
 end
 
 -- 3. 已经得到过明确事务结果时，重复执行直接返回原结果

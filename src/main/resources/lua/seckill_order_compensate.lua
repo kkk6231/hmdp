@@ -1,7 +1,6 @@
 local stockKey = KEYS[1]
 local userOrderKey = KEYS[2]
 local orderStateKey = KEYS[3]
-local pendingKey = KEYS[4]
 
 local orderId = ARGV[1]
 local failedTtlSeconds = tonumber(ARGV[2])
@@ -35,5 +34,4 @@ redis.call('hset', orderStateKey,
         'failedAt', failedTimestamp,
         'updatedAt', failedTimestamp)
 redis.call('expire', orderStateKey, failedTtlSeconds)
-redis.call('zrem', pendingKey, orderId)
 return 0

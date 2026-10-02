@@ -15,9 +15,7 @@ public class SeckillVoucherTransactionContext {
     private final Long userId;
     private final Long voucherId;
 
-    /**
-     * Lua 业务返回码；null 表示本地事务结果尚不能确定。
-     */
+    /** Lua 业务返回码；null 表示本地事务结果尚不能确定。 */
     private volatile Integer luaResult;
 
     public SeckillVoucherTransactionContext(Long orderId, Long userId, Long voucherId) {
